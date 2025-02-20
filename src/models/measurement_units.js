@@ -1,4 +1,5 @@
 const Sequelize = require('sequelize');
+
 module.exports = function(sequelize, DataTypes) {
   return sequelize.define('measurement_units', {
     id: {
@@ -14,6 +15,11 @@ module.exports = function(sequelize, DataTypes) {
     abbreviation: {
       type: DataTypes.STRING(10),
       allowNull: true
+    },
+    conversion_factor: { // 🔹 Nueva columna agregada
+      type: DataTypes.DECIMAL(10,2),
+      allowNull: false,
+      defaultValue: 1 // 🔹 Igual que en la base de datos
     }
   }, {
     sequelize,
@@ -22,15 +28,13 @@ module.exports = function(sequelize, DataTypes) {
     underscored: true, 
     freezeTableName: true,
     schema: 'public',
-    timestamps: false,
     indexes: [
       {
         name: "measurement_units_pkey",
         unique: true,
-        fields: [
-          { name: "id" },
-        ]
-      },
+        fields: [{ name: "id" }]
+      }
     ]
   });
 };
+

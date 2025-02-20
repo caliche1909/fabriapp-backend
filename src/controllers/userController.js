@@ -12,22 +12,32 @@ module.exports = {
         try {
             const { email, password } = req.body;
 
-            if (!email || !password) {
-                return res.status(400).json({ message: "Todos los campos son obligatorios" });
+            if (!email) {
+                return res.status(400).json({ message: "Ingrese su correo electronico" });
+            } else if (!password) {
+                return res.status(400).json({ message: "Ingrese su contraseña" });
             }
 
-            const user = await users.findOne({ where: { email } });
-            if (!user) {
+            const userForLogin = await users.findOne({ where: { email } });
+            if (!userForLogin) {
                 return res.status(404).json({ message: "El usuario ingresado NO EXISTE!" });
             }
 
-            const passwordMatch = await bcrypt.compare(password, user.password);
+            const passwordMatch = await bcrypt.compare(password, userForLogin.password);
             if (!passwordMatch) {
                 return res.status(400).json({ message: "Contraseña incorrecta" });
             }
 
             // **🔹 Generar el token JWT**
-            const token = jwt.sign({ id: user.id, email: user.email, role_id: user.role_id }, SECRET_KEY, { expiresIn: '8h' });
+            const token = jwt.sign({ id: userForLogin.id, email: userForLogin.email, role_id: userForLogin.role_id }, SECRET_KEY, { expiresIn: '8h' });
+
+            const user = {
+                id: userForLogin.id,
+                email: userForLogin.email,
+                name: userForLogin.name,
+                role_id: userForLogin.role_id,
+                phone: userForLogin.phone
+            };
 
             res.status(200).json({ message: "Login exitoso", token, user });
 
@@ -75,7 +85,16 @@ module.exports = {
             const token = jwt.sign({ id: newUser.id, email: newUser.email, role_id: newUser.role_id }, SECRET_KEY, { expiresIn: '8h' });
 
             console.log("✅ Usuario creado:", newUser);
-            res.status(201).json({ message: "Usuario registrado exitosamente", token, user: newUser });
+
+            const userWithoutPassword = {
+                id: newUser.id,
+                email: newUser.email,
+                name: newUser.name,
+                role_id: newUser.role_id,
+                phone: newUser.phone
+            };
+
+            res.status(201).json({ message: "Usuario registrado exitosamente", token, user: userWithoutPassword });
 
         } catch (error) {
             console.error("❌ Error en register:", error.message);

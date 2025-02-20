@@ -1,6 +1,6 @@
 const jwt = require('jsonwebtoken');
 
-const veryfyToken = (req, res, next) => {
+const verifyToken = (req, res, next) => {
     let token = req.headers['authorization'];
     if (!token) {
         return res.status(403).json({ message: "No existe un token" });
@@ -35,4 +35,12 @@ const verifyAdmin = (req, res, next) => {
 
     }
     return res.status(403).json({ message: "Acceso denegado" });
+};
+
+
+// 📌 Exportar las funciones correctamente
+module.exports = {
+    verifyToken,
+    verifyAdmin,
+    verifySuperAdmin
 };
