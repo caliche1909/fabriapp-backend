@@ -9,5 +9,6 @@ const router = express.Router();
 router.post('/create', verifyToken, verifyAdmin, inventory_suppliesController.createInventorySupply); // crear nuevo insumo
 router.get('/list', verifyToken, verifyAdmin, inventory_suppliesController.getAllInventorySupplies); // obtener todos los insumos
 router.put('/update/:id', verifyToken, verifyAdmin, inventory_suppliesController.updateInventorySupply); // actualizar un insumo por id
+router.delete('/delete/:id', verifyToken, verifyAdmin, inventory_suppliesController.deleteInventorySupply); // eliminar un insumo por id
 
 module.exports = router;

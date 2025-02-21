@@ -2,7 +2,6 @@ const { inventory_supplies, measurement_units, supplier_companies } = require('.
 
 module.exports = {
 
-
     // 📌 Método para crear un nuevo insumo
     async createInventorySupply(req, res) {
         console.log("📌 Intentando registrar un nuevo insumo...", req.body);
@@ -157,7 +156,34 @@ module.exports = {
             console.error("❌ Error al actualizar el insumo:", error);
             res.status(500).json({ error: "Error al actualizar el insumo." });
         }
+    },
+
+    // 📌 Método para eliminar un insumo por ID
+    async deleteInventorySupply(req, res) {
+        console.log("📌 Intentando eliminar un insumo por ID...", req.params.id);
+
+        try {
+            // Extraer el id del insumo desde los parámetros de la URL
+            const { id } = req.params;
+
+            // 🔹 Buscar el insumo a eliminar en la base de datos
+            const supplyDB = await inventory_supplies.findByPk(id);
+            if (!supplyDB) {
+                return res.status(404).json({ error: "Este insumo ya NO EXISTE!" });
+            }
+
+            // 🔹 Eliminar el insumo de la base de datos
+            await inventory_supplies.destroy({ where: { id } });
+
+            console.log("✅ Insumo eliminado con éxito:", supplyDB);
+            res.status(200).json({ message: "Insumo eliminado con éxito" });
+
+        } catch (error) {
+            console.error("❌ Error al eliminar el insumo:", error);
+            res.status(500).json({ error: "Error al eliminar el insumo." });
+        }
     }
+
 
 
 };
