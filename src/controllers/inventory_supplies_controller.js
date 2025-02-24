@@ -147,7 +147,24 @@ module.exports = {
             await inventory_supplies.update(updatedFields, { where: { id } });
 
             // 🔹 Obtener el objeto actualizado de la base de datos
-            const updatedSupply = await inventory_supplies.findByPk(id);
+            // 🔹 Obtener el objeto actualizado de la base de datos con el proveedor incluido
+            const updatedSupply = await inventory_supplies.findByPk(id, {
+                include: [
+                    {
+                        model: supplier_companies,
+                        as: "supplier", // Debe coincidir con el alias en la asociación del modelo
+                    },
+                    {
+                        model: measurement_units,
+                        as: 'packaging_unit'
+                    },
+                    {
+                        model: measurement_units,
+                        as: 'portion_unit'
+                    },
+                ],
+            });
+
 
             console.log("✅ Insumo actualizado con éxito:", updatedSupply);
             res.status(200).json(updatedSupply);
@@ -183,8 +200,6 @@ module.exports = {
             res.status(500).json({ error: "Error al eliminar el insumo." });
         }
     }
-
-
 
 };
 
