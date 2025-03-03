@@ -20,7 +20,8 @@ module.exports = {
                 total_quantity_gr_ml_und,
                 unit_price,
                 supplier_id,
-                description
+                description,
+                minimum_stock
             } = req.body;
 
             // 🔹 Normalizar el nombre del insumo
@@ -28,7 +29,7 @@ module.exports = {
 
             // 🔹 Validar datos obligatorios
             if (!name || !packaging_type || !packaging_weight || !packaging_unit_id || !packaging_price || !unit_price
-                || !portions || !portion_unit_id || !portion_price || !total_quantity_gr_ml_und || !supplier_id) {
+                || !portions || !portion_unit_id || !portion_price || !total_quantity_gr_ml_und || !supplier_id || minimum_stock <= 0 || minimum_stock === undefined) {
                 return res.status(400).json({ error: "Faltan datos obligatorios para registrar el insumo" });
             }
 
@@ -43,7 +44,7 @@ module.exports = {
             console.log("📌 Creando insumo con los siguientes datos:", {
                 name, packaging_type, packaging_weight, packaging_unit_id,
                 packaging_price, portions, portion_unit_id, portion_price,
-                total_quantity_gr_ml_und, unit_price, supplier_id, description
+                total_quantity_gr_ml_und, unit_price, supplier_id, description, minimum_stock
             });
 
             // 🔹 Insertar en la base de datos
@@ -59,11 +60,21 @@ module.exports = {
                 total_quantity_gr_ml_und,
                 unit_price,
                 supplier_id,
-                description
+                description, 
+                minimum_stock
             });
 
-            console.log("✅ Insumo registrado con éxito:", newSupply);
-            res.status(201).json(newSupply);
+            // 🔹 Obtener el objeto completo con las asociaciones
+            const fullSupply = await inventory_supplies.findByPk(newSupply.id, {
+                include: [
+                    { model: measurement_units, as: 'packaging_unit' },
+                    { model: measurement_units, as: 'portion_unit' },
+                    { model: supplier_companies, as: 'supplier' }
+                ]
+            })
+
+            console.log("✅ Insumo registrado con éxito:", fullSupply);
+            res.status(201).json(fullSupply);
 
         } catch (error) {
             console.error("❌ Error al registrar el insumo:", error);
@@ -140,7 +151,8 @@ module.exports = {
                 total_quantity_gr_ml_und: req.body.total_quantity_gr_ml_und ?? supplyDB.total_quantity_gr_ml_und,
                 unit_price: req.body.unit_price ?? supplyDB.unit_price,
                 supplier_id: req.body.supplier_id ?? supplyDB.supplier_id,
-                description: req.body.description ?? supplyDB.description
+                description: req.body.description ?? supplyDB.description,
+                minimum_stock: req.body.minimum_stock ?? supplyDB.minimum_stock
             };
 
             // 🔹 Actualizar en la base de datos

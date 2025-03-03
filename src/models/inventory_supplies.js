@@ -6,12 +6,13 @@ module.exports = function (sequelize, DataTypes) {
     id: {
       autoIncrement: true,
       type: DataTypes.INTEGER,
-      allowNull: false,  // 🔹 Corregido
+      allowNull: false,  
       primaryKey: true
     },
     name: {
       type: DataTypes.STRING(100),
-      allowNull: true
+      allowNull: true,
+      unique: true
     },
     packaging_type: {
       type: DataTypes.STRING(100),
@@ -31,7 +32,7 @@ module.exports = function (sequelize, DataTypes) {
         model: 'measurement_units',
         key: 'id'
       },
-      onDelete: 'RESTRICT' // 🔹 Igual que en la BD
+      onDelete: 'RESTRICT'
     },
     packaging_price: {
       type: DataTypes.DECIMAL(10, 2),
@@ -48,7 +49,7 @@ module.exports = function (sequelize, DataTypes) {
         model: 'measurement_units',
         key: 'id'
       },
-      onDelete: 'RESTRICT' // 🔹 Igual que en la BD
+      onDelete: 'RESTRICT'
     },
     portion_price: {
       type: DataTypes.DECIMAL(10, 4),
@@ -69,11 +70,19 @@ module.exports = function (sequelize, DataTypes) {
         model: 'supplier_companies',
         key: 'id'
       },
-      onDelete: 'SET NULL' // 🔹 Igual que en la BD
+      onDelete: 'SET NULL'
     },
     description: {
       type: DataTypes.TEXT,
       allowNull: true
+    },
+    minimum_stock: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: false,
+      defaultValue: 0,
+      validate: {
+        min: 0
+      }
     }
   }, {
     sequelize,
@@ -108,15 +117,18 @@ module.exports = function (sequelize, DataTypes) {
   InventorySupplies.associate = (models) => {
     InventorySupplies.belongsTo(models.measurement_units, {
       foreignKey: 'packaging_unit_id',
-      as: 'packaging_unit'
+      as: 'packaging_unit',
+      onDelete: 'RESTRICT'
     });
     InventorySupplies.belongsTo(models.measurement_units, {
       foreignKey: 'portion_unit_id',
-      as: 'portion_unit'
+      as: 'portion_unit',
+      onDelete: 'RESTRICT'
     });
     InventorySupplies.belongsTo(models.supplier_companies, {
       foreignKey: 'supplier_id',
-      as: 'supplier'
+      as: 'supplier',
+      onDelete: 'SET NULL'
     });
   };
 

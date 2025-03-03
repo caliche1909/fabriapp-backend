@@ -42,9 +42,6 @@ module.exports = function(sequelize, DataTypes) {
   }, {
     sequelize,
     tableName: 'supplies',
-    timestamps: false, 
-    underscored: true, 
-    freezeTableName: true,
     schema: 'public',
     timestamps: false,
     indexes: [
