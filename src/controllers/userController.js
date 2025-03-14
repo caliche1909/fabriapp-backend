@@ -1,6 +1,7 @@
 const { users, roles } = require('../models');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
+const { and } = require('sequelize');
 
 const SALT_ROUNDS = 10;
 const SECRET_KEY = process.env.JWT_SECRET;
@@ -110,6 +111,34 @@ module.exports = {
             res.status(200).json(allUsers);
         } catch (error) {
             res.status(400).json({ error: error.message });
+        }
+    },
+
+    // 📌 Obtener todos los usuarios de tipo vendedor
+    async getSellers(req, res) {
+        try {
+            const roleId = 3; // Rol de Vendedor
+
+            const usersByRole = await users.findAll({
+                where: { role_id: roleId, status: "active" }, // Solo obtener los vendedores activos
+                attributes: ["id", "email", "name", "phone", "status"], // Solo obtener estos campos
+                include: [
+                    {
+                        model: roles,
+                        as: "role",
+                        attributes: ["id", "name"] // Solo obtener el id y el nombre del rol
+                    }
+                ]
+            });
+
+            if (!usersByRole.length) {
+                return res.status(404).json({ message: "No hay vendedores" });
+            }
+
+            res.status(200).json(usersByRole);
+        } catch (error) {
+            console.error("❌ Error al obtener vendedores:", error);
+            res.status(500).json({ error: error.message });
         }
     },
 

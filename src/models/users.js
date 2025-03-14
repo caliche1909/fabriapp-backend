@@ -1,6 +1,7 @@
 const Sequelize = require('sequelize');
+
 module.exports = function (sequelize, DataTypes) {
-  return sequelize.define('users', {
+  const Users = sequelize.define('users', {
     id: {
       autoIncrement: true,
       type: DataTypes.INTEGER,
@@ -31,37 +32,58 @@ module.exports = function (sequelize, DataTypes) {
     phone: {
       type: DataTypes.STRING(20),
       allowNull: true
-    }
+    },
+    status: {
+      type: DataTypes.STRING(10),
+      allowNull: false,
+      defaultValue: 'active',
+      validate: {
+        isIn: [['active', 'inactive']]
+      }
+    },
   }, {
     sequelize,
     tableName: 'users',
-    timestamps: false,
+    timestamps: true, // 🔹 Ahora mantiene los timestamps
     underscored: true,
     freezeTableName: true,
     schema: 'public',
     hasTrigger: true,
-    timestamps: true,
     indexes: [
       {
         name: "idx_users_role_id",
-        fields: [
-          { name: "role_id" },
-        ]
+        fields: [{ name: "role_id" }]
       },
       {
         name: "users_email_key",
         unique: true,
-        fields: [
-          { name: "email" },
-        ]
+        fields: [{ name: "email" }]
       },
       {
         name: "users_pkey",
         unique: true,
-        fields: [
-          { name: "id" },
-        ]
-      },
+        fields: [{ name: "id" }]
+      }
     ]
   });
+
+  // 🔹 Relación: Un usuario puede registrar muchos movimientos de stock
+  Users.associate = (models) => {
+    Users.hasMany(models.supplies_stock, {
+      foreignKey: 'user_id',
+      as: 'movements'
+    });
+
+    Users.belongsTo(models.roles, {
+      foreignKey: 'role_id',
+      as: 'role'
+    });
+
+    Users.hasMany(models.routes, {
+      foreignKey: 'user_id',
+      as: 'routes'
+    });
+  };
+
+  return Users;
 };

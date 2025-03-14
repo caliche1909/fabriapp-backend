@@ -1,6 +1,6 @@
 const Sequelize = require('sequelize');
-module.exports = function(sequelize, DataTypes) {
-  return sequelize.define('stores', {
+module.exports = function (sequelize, DataTypes) {
+  const Stores = sequelize.define('stores', {
     id: {
       autoIncrement: true,
       type: DataTypes.INTEGER,
@@ -54,16 +54,24 @@ module.exports = function(sequelize, DataTypes) {
     longitude: {
       type: DataTypes.DECIMAL,
       allowNull: true
-    }
+    },
+    opening_time: {
+      type: DataTypes.TIME,
+      allowNull: true
+    },
+    closing_time: {
+      type: DataTypes.TIME,
+      allowNull: true
+    },
+
   }, {
     sequelize,
     tableName: 'stores',
-    timestamps: false, 
-    underscored: true, 
+    timestamps: true,
+    underscored: true,
     freezeTableName: true,
     schema: 'public',
     hasTrigger: true,
-    timestamps: true,
     indexes: [
       {
         name: "idx_stores_manager_id",
@@ -92,4 +100,23 @@ module.exports = function(sequelize, DataTypes) {
       },
     ]
   });
+
+  // Definir la asociación belongsTo para la relación con Routes
+  Stores.associate = (models) => {
+
+    // 🔹 Relación con routes (está bien)
+    Stores.belongsTo(models.routes, {
+      foreignKey: 'route_id',
+      as: 'route'
+    });
+    
+    // 🔹 Relación con store_types (está bien)
+    Stores.belongsTo(models.store_types, {
+      foreignKey: "store_type_id",
+      as: "store_type"
+  });
+  };
+
+  return Stores;
 };
+

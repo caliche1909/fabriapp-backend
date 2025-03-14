@@ -1,6 +1,6 @@
 const Sequelize = require('sequelize');
 
-module.exports = function(sequelize, DataTypes) {
+module.exports = function (sequelize, DataTypes) {
   const SuppliesStock = sequelize.define('supplies_stock', {
     id: {
       autoIncrement: true,
@@ -18,7 +18,7 @@ module.exports = function(sequelize, DataTypes) {
       onDelete: 'CASCADE' // Si se elimina un insumo, se eliminan sus registros de stock
     },
     quantity_change_gr_ml_und: {
-      type: DataTypes.DECIMAL(10,2),
+      type: DataTypes.DECIMAL(10, 2),
       allowNull: false
     },
     transaction_type: {
@@ -33,12 +33,21 @@ module.exports = function(sequelize, DataTypes) {
     description: {
       type: DataTypes.TEXT,
       allowNull: true
-    }
+    },
+    user_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: 'users', // Relación con la tabla de usuarios
+        key: 'id'
+      },
+      onDelete: 'SET NULL' // Si se elimina el usuario, el registro no se borra, pero su ID se pone en NULL
+    },
   }, {
     sequelize,
     tableName: 'supplies_stock',
-    timestamps: false, 
-    underscored: true, 
+    timestamps: false,
+    underscored: true,
     freezeTableName: true,
     schema: 'public',
     indexes: [
@@ -55,9 +64,15 @@ module.exports = function(sequelize, DataTypes) {
 
   // Definir la relación con inventory_supplies
   SuppliesStock.associate = (models) => {
+
     SuppliesStock.belongsTo(models.inventory_supplies, {
       foreignKey: 'inventory_supply_id',
       as: 'inventory_supply'
+    });
+
+    SuppliesStock.belongsTo(models.users, {
+      foreignKey: 'user_id',
+      as: 'user'
     });
   };
 

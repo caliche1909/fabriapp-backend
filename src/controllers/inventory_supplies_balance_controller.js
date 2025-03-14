@@ -8,7 +8,10 @@ module.exports = {
         try {
             const balances = await inventory_supplies_balance.findAll({
                 include: [
-                    { model: inventory_supplies, as: "inventory_supply" } // Relación con insumos
+                    {
+                        model: inventory_supplies,
+                        as: "inventory_supply"
+                    } 
                 ],
                 order: [["balance", "ASC"]]
             });
