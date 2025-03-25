@@ -37,10 +37,19 @@ const verifyAdmin = (req, res, next) => {
     return res.status(403).json({ message: "Acceso denegado" });
 };
 
+const verifySeller = (req, res, next) => {
+    if (req.role_id === 1 || req.role_id === 2 || req.role_id === 3) {
+        return next();
+
+    }
+    return res.status(403).json({ message: "Acceso denegado" });
+};
+
 
 // 📌 Exportar las funciones correctamente
 module.exports = {
     verifyToken,
     verifyAdmin,
-    verifySuperAdmin
+    verifySuperAdmin,
+    verifySeller
 };

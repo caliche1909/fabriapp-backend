@@ -7,11 +7,11 @@ module.exports = {
 
         try {
             const routesList = await routes.findAll({
-                attributes: ['id', 'name'],
+                attributes: ['id', 'name', 'working_days'],
                 include: [
                     {
                         model: users,
-                        as: 'user',
+                        as: 'seller',
                         attributes: ['id', 'name', 'email', 'phone', 'status'],
                         include: [
                             {
@@ -24,13 +24,18 @@ module.exports = {
                     {
                         model: stores,
                         as: 'stores',
-                        attributes: ['id', 'name', 'address', 'phone', 'image_url', 'latitude', 'longitude', 'opening_time', 'closing_time'],
+                        attributes: ['id', 'name', 'address', 'phone', 'image_url', 'latitude', 'longitude', 'opening_time', 'closing_time', 'neighborhood'],
                         include: [
                             {
                                 model: store_types,
                                 as: 'store_type',
                                 attributes: ['id', 'name', 'description'],
                             },
+                            {
+                                model: users,
+                                as: 'manager',
+                                attributes: ['id', 'name', 'email', 'phone', 'status']                                
+                            }
                         ],
                     },
                 ],
@@ -48,7 +53,7 @@ module.exports = {
         console.log("📌 Intentando crear una ruta...");
 
         try {
-            const { name, user_id } = req.body;
+            const { name, user_id, working_days } = req.body;
 
             if (!name) {
                 return res.status(400).json({ error: "El nombre de la ruta es requerido." });
@@ -60,7 +65,7 @@ module.exports = {
                 return res.status(400).json({ error: "La ruta ya existe." });
             }
 
-            const newRoute = await routes.create({ name, user_id });
+            const newRoute = await routes.create({ name, user_id, working_days });
             console.log("✅ Ruta creada:", newRoute);
             res.status(201).json(newRoute);
         } catch (error) {

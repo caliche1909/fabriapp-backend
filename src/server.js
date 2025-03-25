@@ -10,6 +10,8 @@ const inventorySuppliesRoutes = require('./routes/inventorySupplierRoute');
 const inventorySuppliesBalanceRoutes = require('./routes/inventorySuppliesBalanceRoutes');
 const suppliesStockRoutes = require('./routes/suppliesStockRoutes');
 const routesRoutes = require('./routes/routesRoutes');
+const storeTypeRoutes = require('./routes/storeTypesRoutes');
+const storesRoutes = require('./routes/storesRoutes');
 
 const app = express();
 
@@ -31,6 +33,8 @@ app.use('/api/inventory_supplies', inventorySuppliesRoutes);
 app.use('/api/inventory_supplies_balance', inventorySuppliesBalanceRoutes);
 app.use('/api/supplies_stock', suppliesStockRoutes);
 app.use('/api/routes', routesRoutes);
+app.use('/api/store_types', storeTypeRoutes);
+app.use('/api/stores', storesRoutes);
 
 // Puerto del servidor
 const PORT = process.env.PORT || 3000;

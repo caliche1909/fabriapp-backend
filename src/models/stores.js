@@ -48,11 +48,11 @@ module.exports = function (sequelize, DataTypes) {
       allowNull: true
     },
     latitude: {
-      type: DataTypes.DECIMAL,
+      type: DataTypes.DECIMAL(23,20),
       allowNull: true
     },
     longitude: {
-      type: DataTypes.DECIMAL,
+      type: DataTypes.DECIMAL(24,20),
       allowNull: true
     },
     opening_time: {
@@ -63,7 +63,22 @@ module.exports = function (sequelize, DataTypes) {
       type: DataTypes.TIME,
       allowNull: true
     },
-
+    city: {
+      type: DataTypes.STRING(100),
+      allowNull: true
+    },
+    state: {
+      type: DataTypes.STRING(100),
+      allowNull: true
+    },
+    country: {
+      type: DataTypes.STRING(100),
+      allowNull: true
+    },
+    neighborhood: {
+      type: DataTypes.STRING(100),
+      allowNull: true
+    },
   }, {
     sequelize,
     tableName: 'stores',
@@ -76,47 +91,48 @@ module.exports = function (sequelize, DataTypes) {
       {
         name: "idx_stores_manager_id",
         fields: [
-          { name: "manager_id" },
+          { name: "manager_id" }
         ]
       },
       {
         name: "idx_stores_route_id",
         fields: [
-          { name: "route_id" },
+          { name: "route_id" }
         ]
       },
       {
         name: "idx_stores_store_type_id",
         fields: [
-          { name: "store_type_id" },
+          { name: "store_type_id" }
         ]
       },
       {
         name: "stores_pkey",
         unique: true,
         fields: [
-          { name: "id" },
+          { name: "id" }
         ]
       },
     ]
   });
 
-  // Definir la asociación belongsTo para la relación con Routes
+  // Asociaciones
   Stores.associate = (models) => {
-
-    // 🔹 Relación con routes (está bien)
     Stores.belongsTo(models.routes, {
       foreignKey: 'route_id',
       as: 'route'
     });
-    
-    // 🔹 Relación con store_types (está bien)
+
     Stores.belongsTo(models.store_types, {
       foreignKey: "store_type_id",
       as: "store_type"
-  });
+    });
+
+    Stores.belongsTo(models.users, {
+      foreignKey: "manager_id",
+      as: "manager"
+    });
   };
 
   return Stores;
 };
-

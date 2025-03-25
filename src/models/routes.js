@@ -23,6 +23,13 @@ module.exports = function (sequelize, DataTypes) {
       type: DataTypes.DATE,
       allowNull: false,
       defaultValue: Sequelize.literal('CURRENT_TIMESTAMP') // 🔹 Ahora guarda la fecha automáticamente
+    },
+    working_days: {
+      // Se define como un array de enum con los días permitidos
+      type: DataTypes.ARRAY(
+        DataTypes.ENUM('domingo', 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado')
+      ),
+      allowNull: true // o false si quieres que sea obligatorio
     }
   }, {
     sequelize,
@@ -48,18 +55,18 @@ module.exports = function (sequelize, DataTypes) {
 
   // Asociación: Una ruta puede pertenecer a un usuario (o estar huérfana)
   Routes.associate = (models) => {
-      
+
     // 🔹 Relación con users: Una ruta pertenece a un usuario
     Routes.belongsTo(models.users, {
       foreignKey: 'user_id',
-      as: 'user'
+      as: 'seller'
     });
 
     // 🔹 Relación con stores: Una ruta tiene muchas tiendas
     Routes.hasMany(models.stores, {
       foreignKey: "route_id",
       as: "stores" // 👈 Este alias es el que usaremos en `include` en la consulta
-  });
+    });
   };
 
   return Routes;
