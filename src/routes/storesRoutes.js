@@ -11,5 +11,6 @@ router.get('/getStoresByRoute/:route_id', verifyToken, verifySeller, storesContr
 router.get('/orphans', verifyToken, verifySeller, storesController.getOrphanStores); // obtener todas las tiendas que no tienen ruta asignada
 router.delete('/delete/:id', verifyToken, verifyAdmin, storesController.deleteStore); // eliminar una tienda
 router.put('/update/:id', verifyToken, verifyAdmin, storesController.updateStore); // actualizar una tienda
+router.put('/assignStoreToRoute/:storeId', verifyToken, verifyAdmin, storesController.assignStoreToRoute); // actualizar la ruta de una tienda
 
 module.exports = router;

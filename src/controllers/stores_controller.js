@@ -1,67 +1,72 @@
 const { where } = require('sequelize');
-const { stores } = require('../models');
+const { stores, users } = require('../models');
 
 module.exports = {
 
-    // 📌 Método para crear una tienda
+    // 📌 Método para crear una tienda con o sin usuario
     async createStore(req, res) {
-        console.log("📌 Intentando crear una tienda...");
+        console.log("📌 Intentando crear una tienda...", req.body);
 
         try {
-            // Extraer los campos obligatorios del cuerpo de la petición
-            let { name, address, store_type_id, neighborhood } = req.body;
+            const { store, user } = req.body;
 
-            // Validar que los campos obligatorios estén presentes
+            // Validar que vengan los datos mínimos de la tienda
+            const { name, address, store_type_id, neighborhood } = store || {};
             if (!name || !address || !store_type_id || !neighborhood) {
-                return res.status(400).json({ error: "Faltan datos obligatorios." });
+                return res.status(400).json({ error: "Faltan datos obligatorios de la tienda." });
             }
 
-            // Aplicar transformación al nombre: eliminar espacios, reemplazar múltiples espacios por uno y convertir a mayúsculas
-            if (name) {
-                name = name.trim().replace(/\s+/g, ' ').toUpperCase();
-            }
+            // Procesar nombre y barrio
+            store.name = store.name.trim().replace(/\s+/g, ' ').toUpperCase();
+            store.neighborhood = store.neighborhood
+                .trim()
+                .replace(/\s+/g, ' ')
+                .split(' ')
+                .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+                .join(' ');
 
-            // Aplicar transformación al barrio: eliminar espacios, reemplazar múltiples espacios por uno y poner la primera letra de cada palabra en mayúscula
-            if (neighborhood) {
-                neighborhood = neighborhood
-                    .trim()
-                    .replace(/\s+/g, ' ')
-                    .split(' ')
-                    .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-                    .join(' ');
-            }
+            // Validar duplicado si coincide nombre y barrio por que puede existir una tienda que se llame igual en otro barrio
+            const existingStore = await stores.findOne({
+                where: { name: store.name, neighborhood: store.neighborhood }
+            });
 
-            // Actualizar req.body con los valores procesados
-            req.body.name = name;
-            req.body.neighborhood = neighborhood;
-
-            // Verificar si ya existe una tienda con el mismo nombre y barrio
-            const existingStore = await stores.findOne({ where: { name, neighborhood } });
             if (existingStore) {
                 return res.status(400).json({ error: "Esta tienda ya existe." });
             }
 
-            // Crear la tienda con los datos proporcionados
-            const newStore = await stores.create(req.body);
+            // ✅ Si llegaron datos del nuevo usuario, registrarlo
+            if (user) {
+                const existingUser = await users.findOne({ where: { email: user.email } });
+                if (existingUser) {
+                    return res.status(400).json({ error: "Email no valido" });
+                }
 
-            // Obtener la tienda creada con sus relaciones completas (store_type y manager)           
+                // Asignamos un rol por defecto (ajusta según tu lógica de roles)
+                const defaultRoleId = 5; //Roll shopKeeper en la base de datos que es el tendero o administrador de la tienda
+
+                const newUser = await users.create({
+                    name: user.name,
+                    email: user.email,
+                    phone: user.countryCode ? `${user.countryCode}-${user.phone}` : user.phone,
+                    role_id: defaultRoleId,
+                    password: "temporal123", // ❗ Cambia esto: en la práctica deberías enviar un correo con enlace o autogenerar contraseña
+                    status: "inactive"
+                });
+
+                // Asignamos su id como manager_id
+                store.manager_id = newUser.id;
+            }
+
+            // Crear la tienda con el manager_id (si fue creado)
+            const newStore = await stores.create(store);
+
+            // Consultar la tienda con relaciones
             const createdStore = await stores.findOne({
                 where: { id: newStore.id },
                 attributes: [
-                    'id',
-                    'name',
-                    'address',
-                    'phone',
-                    'neighborhood',
-                    'route_id',
-                    'image_url',
-                    'latitude',
-                    'longitude',
-                    'opening_time',
-                    'closing_time',
-                    'city',
-                    'state',
-                    'country',
+                    'id', 'name', 'address', 'phone', 'neighborhood', 'route_id',
+                    'image_url', 'latitude', 'longitude', 'opening_time', 'closing_time',
+                    'city', 'state', 'country'
                 ],
                 include: [
                     {
@@ -72,12 +77,11 @@ module.exports = {
                     {
                         association: 'manager',
                         as: 'manager',
-                        attributes: ['name', 'email', 'phone', 'status']
+                        attributes: ['id', 'name', 'email', 'phone', 'status']
                     }
                 ]
             });
 
-            // Devolver la tienda creada con sus relaciones
             return res.status(201).json(createdStore);
         } catch (error) {
             console.error("❌ Error al crear tienda:", error);
@@ -242,7 +246,7 @@ module.exports = {
             store.name = name;
             store.address = address;
             store.phone = phone || store.phone;
-            store.neighborhood = neighborhood;            
+            store.neighborhood = neighborhood;
             store.route_id = route_id !== undefined ? route_id : store.route_id;
             store.image_url = image_url || store.image_url;
             store.latitude = latitude || store.latitude;
@@ -297,6 +301,63 @@ module.exports = {
         } catch (error) {
             console.error("❌ Error al actualizar tienda:", error);
             return res.status(500).json({ error: "Error al actualizar tienda." });
+        }
+    },
+
+    // 📌 Método para asignar una tienda a una ruta
+    async assignStoreToRoute(req, res) {
+        console.log("📌 Intentando asignar una tienda a una ruta...");
+        const { storeId } = req.params;
+        const { route_id } = req.body;
+
+        try {
+            // Verificar si la tienda existe
+            const store = await stores.findByPk(storeId);
+            if (!store) {
+                return res.status(404).json({ error: "La tienda no existe" });
+            }
+
+            // Asignar la tienda a la ruta
+            store.route_id = route_id;
+            await store.save();
+
+            const createdStore = await stores.findOne({
+                where: { id: storeId },
+                attributes: [
+                    'id',
+                    'name',
+                    'address',
+                    'phone',
+                    'neighborhood',
+                    'route_id',
+                    'image_url',
+                    'latitude',
+                    'longitude',
+                    'opening_time',
+                    'closing_time',
+                    'city',
+                    'state',
+                    'country',
+                ],
+                include: [
+                    {
+                        association: 'store_type',
+                        as: 'store_type',
+                        attributes: ['id', 'name']
+                    },
+                    {
+                        association: 'manager',
+                        as: 'manager',
+                        attributes: ['name', 'email', 'phone', 'status']
+                    }
+                ]
+            });
+
+            return res.status(200).json(createdStore);
+
+        } catch (error) {
+            console.error("❌ Error al asignar tienda a ruta:", error);
+            return res.status(500).json({ error: "Error al asignar tienda a ruta." });
         }
     }
 

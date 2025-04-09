@@ -18,8 +18,7 @@ module.exports = function(sequelize, DataTypes) {
     timestamps: false, 
     underscored: true, 
     freezeTableName: true,
-    schema: 'public',
-    timestamps: false,
+    schema: 'public',    
     indexes: [
       {
         name: "roles_name_key",
