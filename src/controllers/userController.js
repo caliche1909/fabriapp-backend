@@ -1,7 +1,6 @@
 const { users, roles } = require('../models');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const { and } = require('sequelize');
 
 const SALT_ROUNDS = 10;
 const SECRET_KEY = process.env.JWT_SECRET;

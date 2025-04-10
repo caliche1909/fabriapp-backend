@@ -1,5 +1,8 @@
-const { where } = require('sequelize');
 const { stores, users } = require('../models');
+const bcrypt = require('bcrypt');
+
+
+const SALT_ROUNDS = 10;
 
 module.exports = {
 
@@ -43,14 +46,16 @@ module.exports = {
 
                 // Asignamos un rol por defecto (ajusta según tu lógica de roles)
                 const defaultRoleId = 5; //Roll shopKeeper en la base de datos que es el tendero o administrador de la tienda
+                const  password = user.password || "PanificadoraSiloe.2025"; // Cambia esto: en la práctica deberías enviar un correo con enlace o autogenerar contraseña
+                const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
 
                 const newUser = await users.create({
                     name: user.name,
                     email: user.email,
                     phone: user.countryCode ? `${user.countryCode}-${user.phone}` : user.phone,
                     role_id: defaultRoleId,
-                    password: "temporal123", // ❗ Cambia esto: en la práctica deberías enviar un correo con enlace o autogenerar contraseña
-                    status: "inactive"
+                    password: hashedPassword, // ❗ Cambia esto: en la práctica deberías enviar un correo con enlace o autogenerar contraseña
+                    status: user.status || "inactive"
                 });
 
                 // Asignamos su id como manager_id
@@ -86,6 +91,154 @@ module.exports = {
         } catch (error) {
             console.error("❌ Error al crear tienda:", error);
             return res.status(500).json({ error: "Error al crear tienda." });
+        }
+    },
+
+    // 📌 Método para actualizar una tienda por id
+    async updateStore(req, res) {
+        console.log("📌 Intentando actualizar una tienda...");
+        const { id } = req.params;
+
+        try {
+            // Verificar si la tienda existe
+            const store = await stores.findByPk(id);
+            if (!store) {
+                return res.status(404).json({ error: "Tienda no encontrada." });
+            }
+
+            // Se espera que el body tenga dos propiedades: newStore y newUser
+            const { newStore, newUser } = req.body;            
+
+            // Extraer todos los campos necesarios del body
+            let {
+                name,
+                address,
+                phone,
+                neighborhood,
+                route_id,
+                image_url,
+                latitude,
+                longitude,
+                opening_time,
+                closing_time,
+                city,
+                state,
+                country,
+                store_type_id,
+                manager_id
+            } = newStore;
+
+            // Validar que los campos obligatorios estén presentes
+            if (!name || !address || !store_type_id || !neighborhood) {
+                return res.status(400).json({ error: "Faltan datos obligatorios." });
+            }
+
+            // Transformar el nombre: eliminar espacios extra y convertir a mayúsculas
+            let transformedName = name.trim().replace(/\s+/g, ' ').toUpperCase();
+
+            // Actualizar los campos de la tienda (manteniendo los que no se envían)
+            store.name = transformedName || store.name;
+            store.address = address || store.address;
+            store.phone = phone || store.phone;
+            store.neighborhood = neighborhood;
+            store.route_id = route_id !== undefined ? route_id : store.route_id;
+            store.image_url = image_url || store.image_url;
+            store.latitude = latitude || store.latitude;
+            store.longitude = longitude || store.longitude;
+            store.opening_time = opening_time || store.opening_time;
+            store.closing_time = closing_time || store.closing_time;
+            store.city = city || store.city;
+            store.state = state || store.state;
+            store.country = country || store.country;
+            store.store_type_id = store_type_id || store.store_type_id;
+            //store.manager_id = manager_id || store.manager_id;
+
+            // Procesar el objeto newUser, si se envía
+            if (newUser) {
+
+                const defaultRoleId = 5;
+                const password = "PanificadoraSiloe.2025";
+                const defaultPassword = await bcrypt.hash(password, SALT_ROUNDS);
+
+                if (store.manager_id) {
+                    // Si la tienda ya tiene manager, buscarlo y actualizarlo
+                    const existingManager = await users.findByPk(store.manager_id);
+                    if (existingManager) {
+                        existingManager.name = newUser.name;
+                        existingManager.email = newUser.email;
+                        existingManager.phone = newUser.countryCode ? `${newUser.countryCode}-${newUser.phone}` : newUser.phone;
+                        existingManager.status = newUser.status || 'inactive';
+
+                        await existingManager.save();
+                    } else {
+                        // En el caso poco frecuente que manager_id esté asignado pero no se encuentre el registro
+                        const createdManager = await users.create({
+                            name: newUser.name,
+                            email: newUser.email,
+                            phone: `${newUser.countryCode}-${newUser.phone}`,
+                            status: newUser.status || 'inactive',                            
+                            role_id: defaultRoleId,
+                            password: defaultPassword, 
+                        });
+                        store.manager_id = createdManager.id;
+                    }
+                } else {
+                    // Si no existe manager para la tienda, se crea uno nuevo
+                    const createdManager = await users.create({
+                        name: newUser.name,
+                        email: newUser.email,
+                        phone: `${newUser.countryCode}-${newUser.phone}`,
+                        status: newUser.status || 'inactive',                            
+                        role_id: defaultRoleId,
+                        password: defaultPassword, 
+                    });
+                    store.manager_id = createdManager.id;
+                }
+            }
+            // Si newUser no viene, se deja manager_id sin cambios
+
+            // Guardar los cambios de la tienda en la base de datos
+            const newStoreRecord = await store.save();
+
+            // Obtener la tienda actualizada con sus relaciones completas (store_type y manager)
+            const updatedStore = await stores.findOne({
+                where: { id: newStoreRecord.id },
+                attributes: [
+                    'id',
+                    'name',
+                    'address',
+                    'phone',
+                    'neighborhood',
+                    'route_id',
+                    'image_url',
+                    'latitude',
+                    'longitude',
+                    'opening_time',
+                    'closing_time',
+                    'city',
+                    'state',
+                    'country'
+                ],
+                include: [
+                    {
+                        association: 'store_type',
+                        as: 'store_type',
+                        attributes: ['id', 'name']
+                    },
+                    {
+                        association: 'manager',
+                        as: 'manager',
+                        attributes: ['name', 'email', 'phone', 'status']
+                    }
+                ]
+            });
+
+            console.log("✅ Tienda actualizada:", updatedStore);
+            // Devuelve la tienda actualizada
+            return res.status(200).json(updatedStore);
+        } catch (error) {
+            console.error("❌ Error al actualizar tienda:", error);
+            return res.status(500).json({ error: "Error al actualizar tienda." });
         }
     },
 
@@ -200,107 +353,6 @@ module.exports = {
         } catch (error) {
             console.error("❌ Error al eliminar tienda:", error);
             return res.status(500).json({ error: "Error al eliminar tienda." });
-        }
-    },
-
-    // 📌 Método para actualizar una tienda por id
-    async updateStore(req, res) {
-        console.log("📌 Intentando actualizar una tienda...");
-        const { id } = req.params;
-
-        try {
-            // Verificar si la tienda existe
-            const store = await stores.findByPk(id);
-            if (!store) {
-                return res.status(404).json({ error: "Tienda no encontrada." });
-            }
-
-            // Extraer todos los campos necesarios del body
-            let {
-                name,
-                address,
-                phone,
-                neighborhood,
-                route_id,
-                image_url,
-                latitude,
-                longitude,
-                opening_time,
-                closing_time,
-                city,
-                state,
-                country,
-                store_type_id,
-                manager_id
-            } = req.body;
-
-            // Validar que los campos obligatorios estén presentes
-            if (!name || !address || !store_type_id || !neighborhood) {
-                return res.status(400).json({ error: "Faltan datos obligatorios." });
-            }
-
-            // Transformar el nombre: eliminar espacios extra y convertir a mayúsculas
-            name = name.trim().replace(/\s+/g, ' ').toUpperCase();
-
-            // Actualizar los campos de la tienda (manteniendo los que no se envían)
-            store.name = name;
-            store.address = address;
-            store.phone = phone || store.phone;
-            store.neighborhood = neighborhood;
-            store.route_id = route_id !== undefined ? route_id : store.route_id;
-            store.image_url = image_url || store.image_url;
-            store.latitude = latitude || store.latitude;
-            store.longitude = longitude || store.longitude;
-            store.opening_time = opening_time || store.opening_time;
-            store.closing_time = closing_time || store.closing_time;
-            store.city = city || store.city;
-            store.state = state || store.state;
-            store.country = country || store.country;
-            store.store_type_id = store_type_id;
-            store.manager_id = manager_id || store.manager_id;
-
-            // Guardar los cambios en la base de datos
-            const newStore = await store.save();
-
-            // Obtener la tienda actualizada con sus relaciones completas (store_type y manager)
-            const updatedStore = await stores.findOne({
-                where: { id: newStore.id },
-                attributes: [
-                    'id',
-                    'name',
-                    'address',
-                    'phone',
-                    'neighborhood',
-                    'route_id',
-                    'image_url',
-                    'latitude',
-                    'longitude',
-                    'opening_time',
-                    'closing_time',
-                    'city',
-                    'state',
-                    'country'
-                ],
-                include: [
-                    {
-                        association: 'store_type',
-                        as: 'store_type',
-                        attributes: ['id', 'name']
-                    },
-                    {
-                        association: 'manager',
-                        as: 'manager',
-                        attributes: ['name', 'email', 'phone', 'status']
-                    }
-                ]
-            });
-
-            console.log("✅ Tienda actualizada:", updatedStore);
-            // Devuelve la tienda actualizada
-            return res.status(200).json(updatedStore);
-        } catch (error) {
-            console.error("❌ Error al actualizar tienda:", error);
-            return res.status(500).json({ error: "Error al actualizar tienda." });
         }
     },
 
