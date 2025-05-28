@@ -1,4 +1,4 @@
-const { stores, users } = require('../models');
+const { stores, users, store_images } = require('../models');
 const bcrypt = require('bcrypt');
 
 
@@ -8,7 +8,7 @@ module.exports = {
 
     // 📌 Método para crear una tienda con o sin usuario
     async createStore(req, res) {
-        console.log("📌 Intentando crear una tienda...", req.body);
+      
 
         try {
             const { store, user } = req.body;
@@ -46,7 +46,7 @@ module.exports = {
 
                 // Asignamos un rol por defecto (ajusta según tu lógica de roles)
                 const defaultRoleId = 5; //Roll shopKeeper en la base de datos que es el tendero o administrador de la tienda
-                const  password = user.password || "PanificadoraSiloe.2025"; // Cambia esto: en la práctica deberías enviar un correo con enlace o autogenerar contraseña
+                const password = user.password || "PanificadoraSiloe.2025"; // Cambia esto: en la práctica deberías enviar un correo con enlace o autogenerar contraseña
                 const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
 
                 const newUser = await users.create({
@@ -96,7 +96,7 @@ module.exports = {
 
     // 📌 Método para actualizar una tienda por id
     async updateStore(req, res) {
-        console.log("📌 Intentando actualizar una tienda...");
+        
         const { id } = req.params;
 
         try {
@@ -107,7 +107,7 @@ module.exports = {
             }
 
             // Se espera que el body tenga dos propiedades: newStore y newUser
-            const { newStore, newUser } = req.body;            
+            const { newStore, newUser } = req.body;
 
             // Extraer todos los campos necesarios del body
             let {
@@ -176,9 +176,9 @@ module.exports = {
                             name: newUser.name,
                             email: newUser.email,
                             phone: `${newUser.countryCode}-${newUser.phone}`,
-                            status: newUser.status || 'inactive',                            
+                            status: newUser.status || 'inactive',
                             role_id: defaultRoleId,
-                            password: defaultPassword, 
+                            password: defaultPassword,
                         });
                         store.manager_id = createdManager.id;
                     }
@@ -188,9 +188,9 @@ module.exports = {
                         name: newUser.name,
                         email: newUser.email,
                         phone: `${newUser.countryCode}-${newUser.phone}`,
-                        status: newUser.status || 'inactive',                            
+                        status: newUser.status || 'inactive',
                         role_id: defaultRoleId,
-                        password: defaultPassword, 
+                        password: defaultPassword,
                     });
                     store.manager_id = createdManager.id;
                 }
@@ -240,11 +240,11 @@ module.exports = {
             console.error("❌ Error al actualizar tienda:", error);
             return res.status(500).json({ error: "Error al actualizar tienda." });
         }
-    },
+    },  
 
     // 📌 Método para obtener todas las tiendas que le pertenecen a una ruta
     async getStoresbyRoute(req, res) {
-        console.log("📌 Intentando obtener todas las tiendas...");
+       
         const { route_id } = req.params;
 
         try {
@@ -258,7 +258,6 @@ module.exports = {
                     'phone',
                     'neighborhood',
                     'route_id',
-                    'image_url',
                     'latitude',
                     'longitude',
                     'opening_time',
@@ -277,6 +276,11 @@ module.exports = {
                         association: 'manager',
                         as: 'manager',
                         attributes: ['name', 'email', 'phone', 'status']
+                    },
+                    {
+                        association: 'images',
+                        as: 'images',
+                        attributes: ['id', 'image_url', 'public_id', 'is_primary'],
                     }
                 ]
             });
@@ -302,8 +306,7 @@ module.exports = {
                     'name',
                     'address',
                     'phone',
-                    'neighborhood',
-                    'image_url',
+                    'neighborhood',                    
                     'latitude',
                     'longitude',
                     'opening_time',
@@ -322,6 +325,11 @@ module.exports = {
                         association: 'manager',
                         as: 'manager',
                         attributes: ['name', 'email', 'phone', 'status']
+                    },
+                    {
+                        association: 'images',
+                        as: 'images',
+                        attributes: ['id', 'image_url', 'public_id', 'is_primary'],
                     }
                 ]
             });

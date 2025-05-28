@@ -7,6 +7,8 @@ const supplies_stockController = require('./supplies_stock_controller');
 const routesController = require('./routes_controller');
 const store_typesController = require('./store_types_controller');
 const storesController = require('./stores_controller');
+const upload_store_imageController = require('./image_upload_controller');
+const store_imagesController = require('./store_images_controller');
 
 module.exports = {
     userController,
@@ -17,5 +19,7 @@ module.exports = {
     supplies_stockController,
     routesController,
     store_typesController,
-    storesController
+    storesController,
+    upload_store_imageController,
+    store_imagesController
 };

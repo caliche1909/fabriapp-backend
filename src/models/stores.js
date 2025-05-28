@@ -43,16 +43,12 @@ module.exports = function (sequelize, DataTypes) {
         key: 'id'
       }
     },
-    image_url: {
-      type: DataTypes.STRING(255),
-      allowNull: true
-    },
     latitude: {
-      type: DataTypes.DECIMAL(23,20),
+      type: DataTypes.DECIMAL(23, 20),
       allowNull: true
     },
     longitude: {
-      type: DataTypes.DECIMAL(24,20),
+      type: DataTypes.DECIMAL(24, 20),
       allowNull: true
     },
     opening_time: {
@@ -131,6 +127,11 @@ module.exports = function (sequelize, DataTypes) {
     Stores.belongsTo(models.users, {
       foreignKey: "manager_id",
       as: "manager"
+    });
+
+    Stores.hasMany(models.store_images, {
+      foreignKey: 'store_id',
+      as: 'images'
     });
   };
 

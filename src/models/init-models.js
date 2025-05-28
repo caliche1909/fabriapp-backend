@@ -10,6 +10,7 @@ var _roles = require("./roles");
 var _routes = require("./routes");
 var _sale_items = require("./sale_items");
 var _sales = require("./sales");
+var _store_images = require("./store_images");
 var _store_types = require("./store_types");
 var _stores = require("./stores");
 var _supplier_companies = require("./supplier_companies");
@@ -30,6 +31,7 @@ function initModels(sequelize) {
   var routes = _routes(sequelize, DataTypes);
   var sale_items = _sale_items(sequelize, DataTypes);
   var sales = _sales(sequelize, DataTypes);
+  var store_images = _store_images(sequelize, DataTypes);
   var store_types = _store_types(sequelize, DataTypes);
   var stores = _stores(sequelize, DataTypes);
   var supplier_companies = _supplier_companies(sequelize, DataTypes);
@@ -74,6 +76,12 @@ function initModels(sequelize) {
   stores.belongsTo(store_types, { as: "store_type", foreignKey: "store_type_id" });
   store_types.hasMany(stores, { as: "stores", foreignKey: "store_type_id" });
 
+  stores.hasMany(store_images, { as: "images", foreignKey: "store_id" });
+  store_images.belongsTo(stores, { as: "store", foreignKey: "store_id" });
+
+  store_images.belongsTo(users, { as: "uploader", foreignKey: "uploaded_by" });
+  users.hasMany(store_images, { as: "uploaded_images", foreignKey: "uploaded_by" });
+
   sales.belongsTo(stores, { as: "store", foreignKey: "store_id" });
   stores.hasMany(sales, { as: "sales", foreignKey: "store_id" });
 
@@ -98,6 +106,7 @@ function initModels(sequelize) {
     routes,
     sale_items,
     sales,
+    store_images,
     store_types,
     stores,
     supplier_companies,

@@ -12,12 +12,14 @@ const suppliesStockRoutes = require('./routes/suppliesStockRoutes');
 const routesRoutes = require('./routes/routesRoutes');
 const storeTypeRoutes = require('./routes/storeTypesRoutes');
 const storesRoutes = require('./routes/storesRoutes');
+const uploadImagesRoutes = require('./routes/uploadImagesRoutes');
 
 const app = express();
 
 // Middleware
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true })); // Para parsear FormData
 
 
 // Ruta de prueba
@@ -35,6 +37,7 @@ app.use('/api/supplies_stock', suppliesStockRoutes);
 app.use('/api/routes', routesRoutes);
 app.use('/api/store_types', storeTypeRoutes);
 app.use('/api/stores', storesRoutes);
+app.use('/api/upload_images', uploadImagesRoutes);
 
 // Puerto del servidor
 const PORT = process.env.PORT || 3000;
