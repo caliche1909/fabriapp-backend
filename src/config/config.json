@@ -2,21 +2,21 @@
   "development": {
     "username": "postgres",
     "password": "Carlos.2020#",
-    "database": "siloe",
+    "database": "fabriapp",
     "host": "127.0.0.1",
     "dialect": "postgres"
   },
   "test": {
     "username": "postgres",
     "password": "Carlos.2020#",
-    "database": "siloe",
+    "database": "fabriapp",
     "host": "127.0.0.1",
     "dialect": "postgres"
   },
   "production": {
     "username": "postgres",
     "password": "Carlos.2020#",
-    "database": "siloe",
+    "database": "fabriapp",
     "host": "127.0.0.1",
     "dialect": "postgres"
   }

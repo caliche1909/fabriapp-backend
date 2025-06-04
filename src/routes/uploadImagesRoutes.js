@@ -7,5 +7,6 @@ const router = express.Router();
 
 // api/upload_images/
 router.post('/store', verifyToken, verifySeller, upload.single('image'), upload_store_imageController.uploadStoreImage); // subir imagen de tienda
+router.delete('/delete', verifyToken, verifySeller, upload_store_imageController.deleteStoreImage); // eliminar imagen de tienda
 
 module.exports = router;

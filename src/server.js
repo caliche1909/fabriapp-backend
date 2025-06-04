@@ -13,7 +13,7 @@ const routesRoutes = require('./routes/routesRoutes');
 const storeTypeRoutes = require('./routes/storeTypesRoutes');
 const storesRoutes = require('./routes/storesRoutes');
 const uploadImagesRoutes = require('./routes/uploadImagesRoutes');
-
+const registerCompanyAndUserRoutes = require('./routes/registerCompanyAndUserRoutes');
 const app = express();
 
 // Middleware
@@ -38,6 +38,7 @@ app.use('/api/routes', routesRoutes);
 app.use('/api/store_types', storeTypeRoutes);
 app.use('/api/stores', storesRoutes);
 app.use('/api/upload_images', uploadImagesRoutes);
+app.use('/api/register-company-and-user', registerCompanyAndUserRoutes);
 
 // Puerto del servidor
 const PORT = process.env.PORT || 3000;

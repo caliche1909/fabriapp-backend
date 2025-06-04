@@ -2,8 +2,170 @@ const cloudinary = require('../config/cloudenary.config');
 const { optimizeImage } = require('../utils/imageOptimizer');
 const storeImageController = require('./store_images_controller');
 const stream = require('stream');
+const { store_images, stores, sequelize } = require('../models');
+const { notifyAdmin } = require('../utils/emailNotifier');
 
 module.exports = {
+
+    // Metodo para eliminar una imagen de tienda
+    async deleteStoreImage(req, res) {
+        const { storeId, imageId, publicId, image_url, isPrimary, user } = req.body
+
+        if (!storeId || !imageId || !publicId || !image_url || !user) {
+            return res.status(400).json({
+                success: false,
+                status: '400',
+                message: 'Datos incompletos para eliminar la imagen',
+                store: null
+            });
+        }
+
+        const transaction = await sequelize.transaction();
+        let cloudinaryDeleted = false;
+
+        try {
+            // 1. Verificar que la imagen existe en la BD
+            const imageRecord = await store_images.findOne({
+                where: { id: imageId, store_id: storeId },
+                transaction
+            });
+
+            if (!imageRecord) {
+                await transaction.rollback();
+                return res.status(404).json({
+                    success: false,
+                    status: '404',
+                    message: 'La imagen no existe en la base de datos',
+                    store: null
+                });
+            }
+
+            // 2. Eliminar de Cloudinary primero
+            const cloudinaryResult = await cloudinary.uploader.destroy(publicId);
+
+            if (cloudinaryResult.result !== 'ok') {
+                await transaction.rollback();
+                return res.status(500).json({
+                    success: false,
+                    status: '500',
+                    message: 'No se pudo eliminar la imagen de Cloudinary',
+                    store: null
+                });
+            }
+
+            cloudinaryDeleted = true;
+
+            // 3. Eliminar de la base de datos
+            await store_images.destroy({
+                where: { id: imageId },
+                transaction
+            });
+
+            // 4. Si era la imagen principal, asignar una nueva
+            if (isPrimary) {
+                const newPrimary = await store_images.findOne({
+                    where: { store_id: storeId },
+                    order: [['created_at', 'DESC']],
+                    transaction
+                });
+
+                if (newPrimary) {
+                    await newPrimary.update({ is_primary: true }, { transaction });
+                }
+            }           
+
+            // Recuperar tienda actualizada
+            const updatedStore = await stores.findByPk(storeId, {
+                attributes: [
+                    'id',
+                    'name',
+                    'address',
+                    'phone',
+                    'neighborhood',
+                    'route_id',
+                    'latitude',
+                    'longitude',
+                    'opening_time',
+                    'closing_time',
+                    'city',
+                    'state',
+                    'country',
+                ],
+                include: [
+                    {
+                        association: 'store_type',
+                        as: 'store_type',
+                        attributes: ['id', 'name']
+                    },
+                    {
+                        association: 'manager',
+                        as: 'manager',
+                        attributes: ['name', 'email', 'phone', 'status']
+                    },
+                    {
+                        association: 'images',
+                        as: 'images',
+                        attributes: ['id', 'image_url', 'public_id', 'is_primary'],
+                    }
+                ],
+                transaction
+            });
+
+            // 5. Confirmar la transacción
+            await transaction.commit();
+
+            return res.status(200).json({
+                success: true,
+                status: '200',
+                message: 'Imagen eliminada exitosamente',
+                store: updatedStore
+            });
+
+        } catch (error) {
+
+            console.log("ERROR AL ELIMINAR IMAGEN:", error);
+            // Rollback en caso de error
+            await transaction.rollback();
+
+            // Intentar recuperar la imagen en Cloudinary si fue eliminada pero falló la BD
+            if (cloudinaryDeleted) {
+                try {
+                    await cloudinary.uploader.upload(image_url, {
+                        public_id: publicId,
+                        overwrite: true,
+                        invalidate: true
+                    });
+                    console.warn('Imagen recreada en Cloudinary después de fallo en BD');
+                } catch (restoreError) {
+                    console.error('Error crítico al restaurar imagen en Cloudinary:', restoreError);
+
+                    // Aquí deberías notificar al equipo para acción manual
+                    await notifyAdmin({
+                        type: 'ORPHANED_IMAGE',
+                        publicId: publicId,
+                        imageUrl: image_url,
+                        userId: user.id
+                    });
+
+                    console.error('Error al eliminar imagen:', {
+                        error: error instanceof Error ? error.message : error,
+                        timestamp: new Date().toISOString()
+                    });
+
+                    return res.status(500).json({
+                        success: false,
+                        status: '500',
+                        message: 'Error al eliminar la imagen',
+                        store: null
+                    });
+                }
+            }
+
+        }
+
+    },
+
+    // Método para subir una imagen de tienda a cloudinary y guardar en la base de datos
     async uploadStoreImage(req, res) {
         const { file, body } = req;
         const { aspect, imageType, storeId, storeName, storeType, user } = body;
@@ -37,15 +199,15 @@ module.exports = {
             // 2. Optimizar imagen
             const maxWidth = imageType === 'banner' ? 1200 : getWidthFromAspect(aspect);
             const maxHeight = imageType === 'banner' ? null : getHeightFromAspect(aspect);
-            
+
             const optimizedBuffer = await optimizeImage(file.buffer, maxWidth, maxHeight);
 
             // 3. Subir a Cloudinary
             cloudinaryResult = await uploadToCloudinary(
-                optimizedBuffer, 
-                storeName, 
-                storeType, 
-                imageType, 
+                optimizedBuffer,
+                storeName,
+                storeType,
+                imageType,
                 userObj
             );
 
@@ -60,15 +222,15 @@ module.exports = {
                 uploaded_by: userObj.id
             };
 
-            const newStore = await storeImageController.createStoreImage(storeId, imageData);             
-           
+            const newStore = await storeImageController.createStoreImage(storeId, imageData);
+
 
             // 5. Respuesta exitosa
             return res.json(newStore);
 
         } catch (error) {
             console.error('❌ Error al procesar la imagen:', error);
-            
+
             // Limpieza en caso de error después de subir a Cloudinary
             if (cloudinaryResult?.public_id) {
                 await cloudinary.uploader.destroy(cloudinaryResult.public_id)
@@ -84,7 +246,9 @@ module.exports = {
                 }
             });
         }
-    }
+    },
+
+
 };
 
 // Funciones auxiliares
@@ -135,29 +299,4 @@ async function uploadToCloudinary(buffer, storeName, storeType, imageType, user)
     });
 }
 
-function formatImageResponse(dbImage, cloudinaryData) {
-    return {
-        id: dbImage.id,
-        url: dbImage.image_url,
-        publicId: dbImage.public_id,
-        format: dbImage.format,
-        dimensions: `${dbImage.width}x${dbImage.height}`,
-        isPrimary: dbImage.is_primary,
-        uploadedAt: dbImage.created_at,
-        cloudinaryData: {
-            storagePath: cloudinaryData.folder,
-            originalFormat: cloudinaryData.original_format
-        }
-    };
-}
 
-function buildMetadata(storeName, aspect, imageType) {
-    return {
-        originalStoreName: storeName,
-        processingDetails: {
-            aspectRatio: aspect,
-            optimized: true,
-            optimizationType: imageType || 'standard'
-        }
-    };
-}
