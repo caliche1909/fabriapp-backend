@@ -9,6 +9,7 @@ module.exports = {
         try {
             // Extraer los datos del cuerpo de la solicitud
             let {
+                company_id,
                 name,
                 packaging_type,
                 packaging_weight,
@@ -28,27 +29,25 @@ module.exports = {
             name = name.trim().replace(/\s+/g, " ").toUpperCase(); // Mayúsculas y eliminación de espacios extra
 
             // 🔹 Validar datos obligatorios
-            if (!name || !packaging_type || !packaging_weight || !packaging_unit_id || !packaging_price || !unit_price
+            if (!company_id || !name || !packaging_type || !packaging_weight || !packaging_unit_id || !packaging_price || !unit_price
                 || !portions || !portion_unit_id || !portion_price || !total_quantity_gr_ml_und || !supplier_id || minimum_stock <= 0 || minimum_stock === undefined) {
                 return res.status(400).json({ error: "Faltan datos obligatorios para registrar el insumo" });
-            }
-
-            console.log("📌 Validando si el insumo ya existe:", name);
+            }          
 
             // 🔹 Verificar si el insumo ya existe
-            const existingSupply = await inventory_supplies.findOne({ where: { name } });
+            const existingSupply = await inventory_supplies.findOne({ 
+                where: { 
+                    name: name,
+                    company_id: company_id 
+                } 
+            });
             if (existingSupply) {
                 return res.status(400).json({ error: "El insumo que intentas registrar YA EXISTE!" });
-            }
-
-            console.log("📌 Creando insumo con los siguientes datos:", {
-                name, packaging_type, packaging_weight, packaging_unit_id,
-                packaging_price, portions, portion_unit_id, portion_price,
-                total_quantity_gr_ml_und, unit_price, supplier_id, description, minimum_stock
-            });
+            }            
 
             // 🔹 Insertar en la base de datos
             const newSupply = await inventory_supplies.create({
+                company_id,
                 name,
                 packaging_type,
                 packaging_weight,
@@ -72,8 +71,7 @@ module.exports = {
                     { model: supplier_companies, as: 'supplier' }
                 ]
             })
-
-            console.log("✅ Insumo registrado con éxito:", fullSupply);
+            
             res.status(201).json(fullSupply);
 
         } catch (error) {
@@ -89,7 +87,7 @@ module.exports = {
     },
 
     // 📌 Método para obtener todos los insumos
-    async getAllInventorySupplies(req, res) {
+    async getListOfInventorySupplies(req, res) {
         console.log("📌 Intentando obtener todos los insumos...");
 
         try {

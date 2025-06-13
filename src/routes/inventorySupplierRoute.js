@@ -1,14 +1,37 @@
 const express = require('express');
 const {inventory_suppliesController} = require('../controllers');
-const {verifyToken, verifyAdmin, verifySuperAdmin} = require('../middlewares/jwt.middleware');
+const {verifyToken, checkPermission} = require('../middlewares/jwt.middleware');
 
 const router = express.Router();
 
-// api/inventory_supplies/
+// api/supplies/
 
-router.post('/create', verifyToken, verifyAdmin, inventory_suppliesController.createInventorySupply); // crear nuevo insumo
-router.get('/list', verifyToken, verifyAdmin, inventory_suppliesController.getAllInventorySupplies); // obtener todos los insumos
-router.put('/update/:id', verifyToken, verifyAdmin, inventory_suppliesController.updateInventorySupply); // actualizar un insumo por id
-router.delete('/delete/:id', verifyToken, verifyAdmin, inventory_suppliesController.deleteInventorySupply); // eliminar un insumo por id
+// Obtener todos los insumos
+router.get('/list', 
+    verifyToken, 
+    checkPermission('view_supplies'), 
+    inventory_suppliesController.getListOfInventorySupplies
+);
+
+// Crear nuevo insumo
+router.post('/create', 
+    verifyToken, 
+    checkPermission('create_supplies'), 
+    inventory_suppliesController.createInventorySupply
+);
+
+// Actualizar un insumo por id
+router.put('/update/:id', 
+    verifyToken, 
+    checkPermission('edit_supplies'), 
+    inventory_suppliesController.updateInventorySupply
+);
+
+// Eliminar un insumo por id
+router.delete('/delete/:id', 
+    verifyToken, 
+    checkPermission('delete_supplies'), 
+    inventory_suppliesController.deleteInventorySupply
+);
 
 module.exports = router;

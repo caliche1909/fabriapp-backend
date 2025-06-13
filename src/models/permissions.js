@@ -97,7 +97,9 @@ module.exports = function (sequelize, DataTypes) {
     // Pertenece a un submódulo
     Permission.belongsTo(models.submodules, {
       foreignKey: 'submodule_id',
-      as: 'submodule'
+      as: 'submodule',
+      onUpdate: 'CASCADE',
+      onDelete: 'CASCADE'
     });
 
     // Relación muchos a muchos con roles a través de role_permissions

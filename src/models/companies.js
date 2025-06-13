@@ -119,6 +119,11 @@ module.exports = function (sequelize, DataTypes) {
             allowNull: false,
             defaultValue: true
         },
+        is_default: {
+            type: DataTypes.BOOLEAN,
+            allowNull: false,
+            defaultValue: false
+        },
         created_at: {
             type: DataTypes.DATE,
             allowNull: false,
@@ -154,6 +159,10 @@ module.exports = function (sequelize, DataTypes) {
             {
                 name: "idx_companies_country",
                 fields: [{ name: "country" }]
+            },
+            {
+                name: "idx_companies_is_default",
+                fields: [{ name: "is_default" }]
             }
         ]
     });
@@ -166,6 +175,34 @@ module.exports = function (sequelize, DataTypes) {
 
     Company.prototype.isOwner = function (userId) {
         return this.owner_id === userId;
+    };
+
+    // Método para establecer esta compañía como predeterminada
+    Company.prototype.setAsDefault = async function () {
+        const transaction = await sequelize.transaction();
+        try {
+            // Primero, establecer todas las compañías del mismo propietario como no predeterminadas
+            await Company.update(
+                { is_default: false },
+                { 
+                    where: { 
+                        owner_id: this.owner_id,
+                        id: { [Sequelize.Op.ne]: this.id }
+                    },
+                    transaction
+                }
+            );
+
+            // Luego, establecer esta compañía como predeterminada
+            this.is_default = true;
+            await this.save({ transaction });
+
+            await transaction.commit();
+            return true;
+        } catch (error) {
+            await transaction.rollback();
+            throw error;
+        }
     };
 
     // Relaciones

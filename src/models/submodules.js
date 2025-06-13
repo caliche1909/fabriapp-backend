@@ -50,7 +50,7 @@ module.exports = function (sequelize, DataTypes) {
       type: DataTypes.TEXT,
       allowNull: true
     },
-    route: {
+    route_path: {
       type: DataTypes.STRING(100),
       allowNull: true,
       validate: {
@@ -95,7 +95,7 @@ module.exports = function (sequelize, DataTypes) {
   // Método para obtener la ruta completa (incluyendo el módulo padre)
   Submodule.prototype.getFullRoute = async function () {
     const module = await this.getModule();
-    return `${module.route_path}${this.route}`;
+    return `${module.route_path}${this.route_path}`;
   };
 
   // Relaciones
@@ -105,8 +105,13 @@ module.exports = function (sequelize, DataTypes) {
       as: 'module'
     });
 
-    // Aquí puedes agregar más relaciones en el futuro
-    // Por ejemplo, con permisos cuando se cree ese modelo
+    // Agregar la relación con permissions
+    Submodule.hasMany(models.permissions, {
+      foreignKey: 'submodule_id',
+      as: 'permissions',
+      onUpdate: 'CASCADE',
+      onDelete: 'CASCADE'
+    });
   };
 
   return Submodule;

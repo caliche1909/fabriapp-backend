@@ -1,6 +1,6 @@
 const Sequelize = require('sequelize');
 
-module.exports = function(sequelize, DataTypes) {
+module.exports = function (sequelize, DataTypes) {
   const InventorySuppliesBalance = sequelize.define('inventory_supplies_balance', {
     id: {
       autoIncrement: true,
@@ -19,9 +19,12 @@ module.exports = function(sequelize, DataTypes) {
       onDelete: 'CASCADE' // Si se elimina un insumo, también se elimina su balance
     },
     balance: {
-      type: DataTypes.DECIMAL(10,2),
+      type: DataTypes.DECIMAL(10, 2),
       allowNull: false,
-      defaultValue: 0 // El balance comienza en 0
+      defaultValue: 0, // El balance comienza en 0
+      validate: {
+        min: 0 // Ensures balance cannot be negative
+      }
     },
     last_updated: {
       type: DataTypes.DATE,
@@ -31,8 +34,8 @@ module.exports = function(sequelize, DataTypes) {
   }, {
     sequelize,
     tableName: 'inventory_supplies_balance',
-    timestamps: false, 
-    underscored: true, 
+    timestamps: false,
+    underscored: true,
     freezeTableName: true,
     schema: 'public',
     indexes: [

@@ -1,12 +1,25 @@
 const express = require('express');
 const {supplierController} = require('../controllers');
-const {verifyToken, verifyAdmin} = require('../middlewares/jwt.middleware');
+const {verifyToken, checkPermission} = require('../middlewares/jwt.middleware');
 
 const router = express.Router();
 
 // api/supplier_companies/
 
-router.post('/create', verifyToken, verifyAdmin, supplierController.createSupplier); //Crear una nueva empresa proveedora
-router.get('/list', verifyToken,verifyAdmin, supplierController.getAllSuppliers); //Obtener todas las empresas proveedoras
+// Crear una nueva empresa proveedora
+router.post('/create', 
+    verifyToken, 
+    checkPermission('create_supplier'), 
+    supplierController.createSupplier
+);
+
+// Obtener todas las empresas proveedoras
+router.get('/list', 
+    verifyToken,
+    checkPermission('view_suppliers'), 
+    supplierController.getAllSuppliers
+);
+
+
 
 module.exports = router;

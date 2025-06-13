@@ -10,7 +10,9 @@ module.exports = {
                 include: [
                     {
                         model: inventory_supplies,
-                        as: "inventory_supply"
+                        as: "inventory_supply",
+                        attributes: ['id', 'name', 'packaging_type', 'packaging_weight', 'total_quantity_gr_ml_und', 'minimum_stock'],
+                        include: [] // No incluir asociaciones anidadas
                     } 
                 ],
                 order: [["balance", "ASC"]]

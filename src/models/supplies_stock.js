@@ -35,7 +35,7 @@ module.exports = function (sequelize, DataTypes) {
       allowNull: true
     },
     user_id: {
-      type: DataTypes.INTEGER,
+      type: DataTypes.UUID,
       allowNull: true,
       references: {
         model: 'users', // Relación con la tabla de usuarios
@@ -58,13 +58,20 @@ module.exports = function (sequelize, DataTypes) {
       {
         name: "idx_supplies_stock_transaction_type",
         fields: [{ name: "transaction_type" }]
+      },
+      {
+        name: "idx_supplies_stock_transaction_date",
+        fields: [{ name: "transaction_date" }]
+      },
+      {
+        name: "idx_supplies_stock_user",
+        fields: [{ name: "user_id" }]
       }
     ]
   });
 
   // Definir la relación con inventory_supplies
   SuppliesStock.associate = (models) => {
-
     SuppliesStock.belongsTo(models.inventory_supplies, {
       foreignKey: 'inventory_supply_id',
       as: 'inventory_supply'

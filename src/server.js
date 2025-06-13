@@ -14,6 +14,7 @@ const storeTypeRoutes = require('./routes/storeTypesRoutes');
 const storesRoutes = require('./routes/storesRoutes');
 const uploadImagesRoutes = require('./routes/uploadImagesRoutes');
 const registerCompanyAndUserRoutes = require('./routes/registerCompanyAndUserRoutes');
+const companyRoutes = require('./routes/companyRoutes');
 const app = express();
 
 // Middleware
@@ -31,14 +32,15 @@ app.get('/', (req, res) => {
 app.use('/api/users', userRoutes);
 app.use('/api/measurement_units', measurementUnitsRoutes);
 app.use('/api/supplier_companies', supplierCompaniesRoutes);
-app.use('/api/inventory_supplies', inventorySuppliesRoutes);
-app.use('/api/inventory_supplies_balance', inventorySuppliesBalanceRoutes);
+app.use('/api/supplies', inventorySuppliesRoutes);
+app.use('/api/balance_inventory_supplies', inventorySuppliesBalanceRoutes);
 app.use('/api/supplies_stock', suppliesStockRoutes);
 app.use('/api/routes', routesRoutes);
 app.use('/api/store_types', storeTypeRoutes);
 app.use('/api/stores', storesRoutes);
 app.use('/api/upload_images', uploadImagesRoutes);
 app.use('/api/register-company-and-user', registerCompanyAndUserRoutes);
+app.use('/api/company', companyRoutes);
 
 // Puerto del servidor
 const PORT = process.env.PORT || 3000;

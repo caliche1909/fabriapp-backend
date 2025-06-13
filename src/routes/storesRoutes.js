@@ -1,16 +1,45 @@
 const express = require('express');
 const {storesController} = require('../controllers');
-const {verifyToken, verifySeller, verifyAdmin} = require('../middlewares/jwt.middleware');
+const {verifyToken, checkPermission} = require('../middlewares/jwt.middleware');
 
 const router = express.Router();
 
 // api/stores/
 
-router.post('/create', verifyToken, verifySeller, storesController.createStore); // crear una tienda
-router.get('/getStoresByRoute/:route_id', verifyToken, verifySeller, storesController.getStoresbyRoute); // obtener todas las tiendas de una ruta
-router.get('/orphans', verifyToken, verifySeller, storesController.getOrphanStores); // obtener todas las tiendas que no tienen ruta asignada
-router.delete('/delete/:id', verifyToken, verifyAdmin, storesController.deleteStore); // eliminar una tienda
-router.put('/update/:id', verifyToken, verifyAdmin, storesController.updateStore); // actualizar una tienda
-router.put('/assignStoreToRoute/:storeId', verifyToken, verifyAdmin, storesController.assignStoreToRoute); // actualizar la ruta de una tienda
+router.post('/create', 
+    verifyToken, 
+    checkPermission('create_stores_management'), 
+    storesController.createStore
+);
+
+router.get('/getStoresByRoute/:route_id', 
+    verifyToken, 
+    checkPermission('view_stores_management'), 
+    storesController.getStoresbyRoute
+);
+
+router.get('/orphans', 
+    verifyToken, 
+    checkPermission('view_stores_management'), 
+    storesController.getOrphanStores
+);
+
+router.delete('/delete/:id', 
+    verifyToken, 
+    checkPermission('delete_stores_management'), 
+    storesController.deleteStore
+);
+
+router.put('/update/:id', 
+    verifyToken, 
+    checkPermission('edit_stores_management'), 
+    storesController.updateStore
+);
+
+router.put('/assignStoreToRoute/:storeId', 
+    verifyToken, 
+    checkPermission('edit_stores_management'), 
+    storesController.assignStoreToRoute
+);
 
 module.exports = router;

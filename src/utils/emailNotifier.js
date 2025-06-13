@@ -1,4 +1,5 @@
 const nodemailer = require('nodemailer');
+const { getWelcomeEmailTemplate, getAdminNotificationTemplate } = require('./email');
 require('dotenv').config();
 
 // Configuración del transporter
@@ -18,26 +19,13 @@ const transporter = nodemailer.createTransport({
 // Función para notificar al admin
 async function notifyAdmin(notificationData) {
     try {
+        const template = getAdminNotificationTemplate(notificationData);
         const mailOptions = {
             from: `"Sistema de Imágenes" <${process.env.SMTP_USER}>`,
             to: process.env.ADMIN_EMAIL,
-            subject: `⚠️ Alerta del Sistema: ${notificationData.type || 'Error crítico'}`,
-            html: `
-                <h2>Se requiere acción manual</h2>
-                <p><strong>Tipo:</strong> ${notificationData.type || 'ORPHANED_IMAGE'}</p>
-                <p><strong>Public ID:</strong> ${notificationData.publicId}</p>
-                <p><strong>Usuario ID:</strong> ${notificationData.userId}</p>
-                <p><strong>URL de imagen:</strong> <a href="${notificationData.imageUrl}">${notificationData.imageUrl}</a></p>
-                <p><strong>Timestamp:</strong> ${new Date().toISOString()}</p>
-                <br>
-                <p>Por favor revisa este incidente lo antes posible.</p>
-            `,
-            text: `Se requiere acción manual:
-                   Tipo: ${notificationData.type || 'ORPHANED_IMAGE'}
-                   Public ID: ${notificationData.publicId}
-                   Usuario ID: ${notificationData.userId}
-                   URL: ${notificationData.imageUrl}
-                   Timestamp: ${new Date().toISOString()}`
+            subject: template.subject,
+            html: template.html,
+            text: template.text
         };
 
         const info = await transporter.sendMail(mailOptions);
@@ -49,4 +37,25 @@ async function notifyAdmin(notificationData) {
     }
 }
 
-module.exports = { notifyAdmin };
+// Función para enviar email de bienvenida
+async function sendWelcomeEmail(userData) {
+    try {
+        const template = getWelcomeEmailTemplate(userData);
+        const mailOptions = {
+            from: `"FabriApp - SistemApp" <${process.env.SMTP_USER}>`,
+            to: userData.email,
+            subject: template.subject,
+            html: template.html,
+            text: template.text
+        };
+
+        const info = await transporter.sendMail(mailOptions);
+        console.log('Email de bienvenida enviado:', info.messageId);
+        return true;
+    } catch (error) {
+        console.error('Error al enviar email de bienvenida:', error);
+        return false;
+    }
+}
+
+module.exports = { notifyAdmin, sendWelcomeEmail };

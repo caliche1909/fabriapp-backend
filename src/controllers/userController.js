@@ -1,4 +1,4 @@
-const { users, roles } = require('../models');
+const { users, roles, permissions, companies } = require('../models');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 
@@ -12,38 +12,161 @@ module.exports = {
         try {
             const { email, password } = req.body;
 
+            // Validar email
             if (!email) {
-                return res.status(400).json({ message: "Ingrese su correo electronico" });
-            } else if (!password) {
-                return res.status(400).json({ message: "Ingrese su contraseña" });
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: "Ingrese su email"
+                });
             }
 
-            const userForLogin = await users.findOne({ where: { email } });
+            // Validar password
+            if (!password) {
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: "Ingrese su contraseña"
+                });
+            }
+
+            // Buscar usuario con sus roles y permisos
+            const userForLogin = await users.findOne({
+                where: { email: email },
+                include: [
+                    {
+                        model: roles,
+                        as: 'role',
+                        include: [{
+                            model: permissions,
+                            as: 'permissions',
+                            attributes: ['name', 'code', 'description', 'is_active'],
+                            through: { attributes: [] }
+                        }]
+                    },
+                    {
+                        model: companies,
+                        as: 'owned_companies',
+                        attributes: [
+                            'id', 
+                            'name', 
+                            'legal_name',
+                            'tax_id', 
+                            'email', 
+                            'phone',
+                            'address', 
+                            'city', 
+                            'state', 
+                            'country',
+                            'postal_code', 
+                            'logo_url', 
+                            'website',
+                            'is_active',
+                            'is_default'
+                        ]
+                    }
+                ]
+            });
+
+            // Verificar si el usuario existe
             if (!userForLogin) {
-                return res.status(404).json({ message: "El usuario ingresado NO EXISTE!" });
+                return res.status(404).json({
+                    success: false,
+                    status: 404,
+                    message: "El usuario ingresado no existe"
+                });
             }
 
-            const passwordMatch = await bcrypt.compare(password, userForLogin.password);
+            // Verificar contraseña usando el método del modelo
+            const passwordMatch = await userForLogin.validatePassword(password);
             if (!passwordMatch) {
-                return res.status(400).json({ message: "Contraseña incorrecta" });
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: "Contraseña incorrecta"
+                });
             }
 
-            // **🔹 Generar el token JWT**
-            const token = jwt.sign({ id: userForLogin.id, email: userForLogin.email, role_id: userForLogin.role_id }, SECRET_KEY, { expiresIn: '8h' });
+            // Generar token JWT
+            const token = jwt.sign(
+                {
+                    id: userForLogin.id,
+                    email: userForLogin.email,
+                    role_id: userForLogin.role.id
+                },
+                SECRET_KEY,
+                { expiresIn: '8h' }
+            );
 
+            // Actualizar último login
+            await userForLogin.updateLastLogin();
+
+            // Procesar el teléfono para separar código de país y número
+            let countryCode = undefined;
+            let phoneNumber = undefined;
+
+            if (userForLogin.phone) {
+                if (userForLogin.phone.includes('-')) {
+                    [countryCode, phoneNumber] = userForLogin.phone.split('-');
+                } else {
+                    phoneNumber = userForLogin.phone;
+                }
+            }
+
+            // Preparar objeto de usuario para la respuesta
             const user = {
                 id: userForLogin.id,
                 email: userForLogin.email,
-                name: userForLogin.name,
-                role_id: userForLogin.role_id,
-                phone: userForLogin.phone
+                name: userForLogin.first_name,
+                lastName: userForLogin.last_name,
+                countryCode: countryCode,
+                phone: phoneNumber,
+                status: userForLogin.status,
+                role: {
+                    id: userForLogin.role.id,
+                    name: userForLogin.role.name
+                },
+                companies: userForLogin.owned_companies.map(company => ({
+                    id: company.id,
+                    name: company.name,
+                    legalName: company.legal_name,
+                    taxId: company.tax_id,
+                    email: company.email,
+                    phone: company.phone,
+                    address: company.address,
+                    city: company.city,
+                    state: company.state,
+                    country: company.country,
+                    postalCode: company.postal_code,
+                    logoUrl: company.logo_url,
+                    website: company.website,
+                    isActive: company.is_active,
+                    isDefault: company.is_default
+                })),
+                permissions: userForLogin.role.permissions.map(perm => ({
+                    name: perm.name,
+                    code: perm.code,
+                    description: perm.description || '',
+                    isActive: perm.is_active
+                }))
             };
 
-            res.status(200).json({ message: "Login exitoso", token, user });
+            // Enviar respuesta exitosa
+            return res.status(200).json({
+                success: true,
+                status: 200,
+                message: "Login exitoso",
+                token,
+                user
+            });
 
         } catch (error) {
-            console.error("❌ Error en login:", error.message);
-            res.status(500).json({ error: error.message });
+            console.error("❌ Error en login:", error);
+            return res.status(500).json({
+                success: false,
+                status: 500,
+                message: "Error interno del servidor"
+            });
         }
     },
 

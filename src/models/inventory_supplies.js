@@ -6,13 +6,23 @@ module.exports = function (sequelize, DataTypes) {
     id: {
       autoIncrement: true,
       type: DataTypes.INTEGER,
-      allowNull: false,  
+      allowNull: false,
       primaryKey: true
+    },
+    company_id: {
+      type: DataTypes.UUID,
+      allowNull: false,
+      references: {
+        model: 'companies',
+        key: 'id'
+      }
     },
     name: {
       type: DataTypes.STRING(100),
-      allowNull: true,
-      unique: true
+      allowNull: false,
+      validate: {
+        notEmpty: true
+      }
     },
     packaging_type: {
       type: DataTypes.STRING(100),
@@ -94,7 +104,11 @@ module.exports = function (sequelize, DataTypes) {
     hasTrigger: true,
     indexes: [
       {
-        name: "idx_inventory_supplies_supplier_id",
+        name: "idx_inventory_supplies_company",
+        fields: [{ name: "company_id" }]
+      },
+      {
+        name: "idx_inventory_supplies_supplier",
         fields: [{ name: "supplier_id" }]
       },
       {
@@ -109,12 +123,21 @@ module.exports = function (sequelize, DataTypes) {
         name: "inventory_supplies_pkey",
         unique: true,
         fields: [{ name: "id" }]
+      },
+      {
+        name: "unique_supply_per_company",
+        unique: true,
+        fields: [{ name: "company_id" }, { name: "name" }]
       }
     ]
   });
 
   // 2. Agregar las asociaciones
   InventorySupplies.associate = (models) => {
+    InventorySupplies.belongsTo(models.companies, {
+      foreignKey: 'company_id',
+      as: 'company'
+    });
     InventorySupplies.belongsTo(models.measurement_units, {
       foreignKey: 'packaging_unit_id',
       as: 'packaging_unit',
@@ -129,6 +152,16 @@ module.exports = function (sequelize, DataTypes) {
       foreignKey: 'supplier_id',
       as: 'supplier',
       onDelete: 'SET NULL'
+    });
+    InventorySupplies.belongsToMany(models.supplier_companies, {
+      through: models.inventory_supplies_suppliers,
+      foreignKey: 'inventory_supply_id',
+      otherKey: 'supplier_id',
+      as: 'suppliers'
+    });
+    InventorySupplies.hasMany(models.inventory_supplies_suppliers, {
+      foreignKey: 'inventory_supply_id',
+      as: 'supplier_details'
     });
   };
 

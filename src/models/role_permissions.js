@@ -36,14 +36,22 @@ module.exports = function (sequelize, DataTypes) {
     },
     company_id: {
       type: DataTypes.UUID,
-      allowNull: false,
+      allowNull: true,
       references: {
         model: 'companies',
         key: 'id'
       },
       validate: {
-        notNull: {
-          msg: 'La compañía es requerida'
+        async isValidCompanyRole(value) {
+          const role = await sequelize.models.roles.findByPk(this.role_id);
+          if (!role) throw new Error('Rol no encontrado');
+          
+          if (role.is_global && value !== null) {
+            throw new Error('Los roles globales no pueden tener una compañía asignada');
+          }
+          if (!role.is_global && value === null) {
+            throw new Error('Los roles no globales deben tener una compañía asignada');
+          }
         }
       }
     },
@@ -74,6 +82,11 @@ module.exports = function (sequelize, DataTypes) {
       {
         name: "idx_role_permissions_company",
         fields: [{ name: "company_id" }]
+      },
+      {
+        name: "idx_role_permissions_global",
+        fields: [{ name: "role_id" }],
+        where: { company_id: null }
       }
     ]
   });
