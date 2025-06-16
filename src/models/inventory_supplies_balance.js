@@ -18,6 +18,16 @@ module.exports = function (sequelize, DataTypes) {
       },
       onDelete: 'CASCADE' // Si se elimina un insumo, también se elimina su balance
     },
+    company_id: {
+      type: DataTypes.UUID,
+      allowNull: false,
+      references: {
+        model: 'companies',
+        key: 'id'
+      },
+      onDelete: 'CASCADE', // Si se elimina una compañía, también se eliminan sus balances
+      comment: 'ID de la compañía propietaria del insumo. Desnormalización para optimizar consultas de balance por compañía. Se sincroniza automáticamente con inventory_supplies.company_id'
+    },
     balance: {
       type: DataTypes.DECIMAL(10, 2),
       allowNull: false,
@@ -42,15 +52,30 @@ module.exports = function (sequelize, DataTypes) {
       {
         name: "idx_inventory_supplies_balance_inventory_supply",
         fields: [{ name: "inventory_supply_id" }]
+      },
+      {
+        name: "idx_inventory_supplies_balance_company_id",
+        fields: [{ name: "company_id" }]
+      },
+      {
+        name: "idx_inventory_supplies_balance_company_balance",
+        fields: [{ name: "company_id" }, { name: "balance" }]
       }
     ]
   });
 
-  // Definir la relación con inventory_supplies
+  // Definir las relaciones
   InventorySuppliesBalance.associate = (models) => {
+    // Relación con inventory_supplies
     InventorySuppliesBalance.belongsTo(models.inventory_supplies, {
       foreignKey: 'inventory_supply_id',
       as: 'inventory_supply'
+    });
+
+    // Relación directa con companies (nueva)
+    InventorySuppliesBalance.belongsTo(models.companies, {
+      foreignKey: 'company_id',
+      as: 'company'
     });
   };
 

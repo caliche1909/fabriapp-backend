@@ -1,5 +1,6 @@
 var DataTypes = require("sequelize").DataTypes;
 var _SequelizeMeta = require("./SequelizeMeta");
+var _companies = require("./companies");
 var _inventory_supplies = require("./inventory_supplies");
 var _measurement_units = require("./measurement_units");
 var _payment_methods = require("./payment_methods");
@@ -14,6 +15,7 @@ var _store_images = require("./store_images");
 var _store_types = require("./store_types");
 var _stores = require("./stores");
 var _supplier_companies = require("./supplier_companies");
+var _supplier_verifications = require("./supplier_verifications");
 var _supplies_stock = require("./supplies_stock");
 var _inventory_supplies_balance = require("./inventory_supplies_balance"); // 📌 Agregado
 var _users = require("./users");
@@ -21,6 +23,7 @@ var _work_areas = require("./work_areas");
 
 function initModels(sequelize) {
   var SequelizeMeta = _SequelizeMeta(sequelize, DataTypes);
+  var companies = _companies(sequelize, DataTypes);
   var inventory_supplies = _inventory_supplies(sequelize, DataTypes);
   var measurement_units = _measurement_units(sequelize, DataTypes);
   var payment_methods = _payment_methods(sequelize, DataTypes);
@@ -35,6 +38,7 @@ function initModels(sequelize) {
   var store_types = _store_types(sequelize, DataTypes);
   var stores = _stores(sequelize, DataTypes);
   var supplier_companies = _supplier_companies(sequelize, DataTypes);
+  var supplier_verifications = _supplier_verifications(sequelize, DataTypes);
   var supplies_stock = _supplies_stock(sequelize, DataTypes);
   var inventory_supplies_balance = _inventory_supplies_balance(sequelize, DataTypes); // 📌 Agregado
   var users = _users(sequelize, DataTypes);
@@ -94,8 +98,19 @@ function initModels(sequelize) {
   products.belongsTo(work_areas, { as: "production_area", foreignKey: "production_area_id" });
   work_areas.hasMany(products, { as: "products", foreignKey: "production_area_id" });
 
+  // ✅ Relaciones para supplier_verifications
+  supplier_verifications.belongsTo(supplier_companies, { as: "supplier", foreignKey: "supplier_id", onDelete: "CASCADE" });
+  supplier_companies.hasMany(supplier_verifications, { as: "verifications", foreignKey: "supplier_id", onDelete: "CASCADE" });
+
+  supplier_verifications.belongsTo(users, { as: "verifying_user", foreignKey: "user_id" });
+  users.hasMany(supplier_verifications, { as: "supplier_verifications", foreignKey: "user_id" });
+
+  supplier_verifications.belongsTo(companies, { as: "verifying_company", foreignKey: "company_id" });
+  companies.hasMany(supplier_verifications, { as: "supplier_verifications", foreignKey: "company_id" });
+
   return {
     SequelizeMeta,
+    companies,
     inventory_supplies,
     measurement_units,
     payment_methods,
@@ -110,6 +125,7 @@ function initModels(sequelize) {
     store_types,
     stores,
     supplier_companies,
+    supplier_verifications,
     supplies_stock,
     inventory_supplies_balance,
     users,

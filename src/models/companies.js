@@ -213,8 +213,25 @@ module.exports = function (sequelize, DataTypes) {
             foreignKey: 'owner_id'
         });
 
-        // Aquí puedes agregar más relaciones en el futuro
-        // Por ejemplo, con stores, employees, etc.
+        // Una compañía puede tener muchos insumos
+        Company.hasMany(models.inventory_supplies, {
+            foreignKey: 'company_id',
+            as: 'inventory_supplies'
+        });
+
+        // Relación muchos a muchos con users a través de user_companies
+        Company.belongsToMany(models.users, {
+            through: models.user_companies,
+            foreignKey: 'company_id',
+            otherKey: 'user_id',
+            as: 'assigned_users'
+        });
+
+        // Relación con user_companies
+        Company.hasMany(models.user_companies, {
+            foreignKey: 'company_id',
+            as: 'user_assignments'
+        });
     };
 
     return Company;

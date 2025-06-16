@@ -4,9 +4,10 @@ const {verifyToken, checkPermission} = require('../middlewares/jwt.middleware');
 
 const router = express.Router();
 
-// api/inventory_supplies_balance/
+// api/balance_inventory_supplies/
 
-router.get('/list', 
+// 📌 Ruta para obtener balances por compañía
+router.get('/list/:company_id', 
     verifyToken, 
     checkPermission('view_supplies_stock'), 
     inventory_supplies_balanceController.getListInventorySuppliesBalance

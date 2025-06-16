@@ -93,6 +93,11 @@ module.exports = function (sequelize, DataTypes) {
       validate: {
         min: 0
       }
+    },
+    last_purchase_date: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      comment: 'Fecha de la última compra realizada a este proveedor para este insumo'
     }
   }, {
     sequelize,
@@ -123,11 +128,6 @@ module.exports = function (sequelize, DataTypes) {
         name: "inventory_supplies_pkey",
         unique: true,
         fields: [{ name: "id" }]
-      },
-      {
-        name: "unique_supply_per_company",
-        unique: true,
-        fields: [{ name: "company_id" }, { name: "name" }]
       }
     ]
   });
@@ -152,16 +152,6 @@ module.exports = function (sequelize, DataTypes) {
       foreignKey: 'supplier_id',
       as: 'supplier',
       onDelete: 'SET NULL'
-    });
-    InventorySupplies.belongsToMany(models.supplier_companies, {
-      through: models.inventory_supplies_suppliers,
-      foreignKey: 'inventory_supply_id',
-      otherKey: 'supplier_id',
-      as: 'suppliers'
-    });
-    InventorySupplies.hasMany(models.inventory_supplies_suppliers, {
-      foreignKey: 'inventory_supply_id',
-      as: 'supplier_details'
     });
   };
 

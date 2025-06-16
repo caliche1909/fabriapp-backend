@@ -37,8 +37,6 @@ module.exports = {
         }
     },
 
-
-
     // 📌 Método para obtener los últimos movimientos de stock de un insumo específico
     async getSuppliesStockBySupplyId(req, res) {
         console.log("📌 Intentando obtener movimientos de stock para un insumo específico...");
@@ -48,45 +46,78 @@ module.exports = {
             const { supplyId } = req.params;
 
             if (!supplyId) {
-                return res.status(400).json({ error: "Se requiere el ID del insumo" });
+                return res.status(400).json({ 
+                    success: false,
+                    message: "Se requiere el ID del insumo",
+                    movements: []
+                });
             }
 
             console.log(`🔍 Buscando movimientos de stock para el insumo ID: ${supplyId}`);
 
-            // Consultar los últimos 20 movimientos de stock del insumo específico
+            // Consultar los últimos 50 movimientos de stock del insumo específico
             const stockMovements = await supplies_stock.findAll({
                 where: { inventory_supply_id: supplyId },
+                attributes: [
+                    'id',
+                    'inventory_supply_id', 
+                    'transaction_type',
+                    'quantity_change_gr_ml_und',
+                    'transaction_date',
+                    'description'
+                ],
                 include: [
                     {
-                        model: inventory_supplies,
-                        as: "inventory_supply"
-                    },
-                    {
-                        model: users,  // 🔹 Incluir información del usuario
+                        model: users,
                         as: "user",
-                        attributes: ["name"], // Seleccionar solo los datos relevantes
-                        required: false, // 🔹 Hacer la relación opcional
+                        attributes: ["id", "first_name", "last_name"],
+                        required: false, // Hacer la relación opcional
                         include: [{
                             model: roles,
                             as: "role",
-                            attributes: ["name"] // Seleccionar solo los datos relevantes
+                            attributes: ["id", "name"]
                         }]
                     }
                 ],
-                order: [['transaction_date', 'DESC']], // Ordenar del más reciente al más antiguo
-                limit: 20 // Limitar a los últimos 20 registros
+                order: [['transaction_date', 'DESC']], // Del más reciente al más antiguo
+                limit: 50 // Máximo 50 registros
             });
 
-            console.log(`✅ Movimientos encontrados (${stockMovements.length}):`, stockMovements);
+            // Formatear la respuesta según el formato solicitado
+            const formattedMovements = stockMovements.map(movement => ({
+                id: movement.id,
+                inventory_supply_id: movement.inventory_supply_id,
+                transaction_type: movement.transaction_type,
+                quantity_change_gr_ml_und: movement.quantity_change_gr_ml_und,
+                transaction_date: movement.transaction_date,
+                description: movement.description,
+                inventory_supply: null, // Como solicitado
+                user: movement.user ? {
+                    id: movement.user.id,
+                    name: movement.user.first_name,
+                    lastName: movement.user.last_name,
+                    role: movement.user.role ? {
+                        id: movement.user.role.id,
+                        name: movement.user.role.name
+                    } : null
+                } : null
+            }));
 
-            return res.status(200).json(stockMovements);
+            console.log(`✅ Movimientos encontrados: ${formattedMovements.length}`);
+
+            return res.status(200).json({
+                success: true,
+                message: "Movimientos obtenidos exitosamente",
+                movements: formattedMovements               
+            });
 
         } catch (error) {
             console.error("❌ Error al obtener los movimientos de stock:", error);
-            return res.status(500).json({ message: "❌ Error interno del servidor" });
+            return res.status(500).json({ 
+                success: false,
+                message: "Error interno del servidor",
+                movements: []
+            });
         }
     }
-
-
-
 }
