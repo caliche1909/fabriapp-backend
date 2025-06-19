@@ -1,10 +1,12 @@
-// models/storeImage.js
+const Sequelize = require('sequelize');
+
 module.exports = (sequelize, DataTypes) => {
   const StoreImage = sequelize.define('store_images', {
     id: {
       type: DataTypes.INTEGER,
       autoIncrement: true,
-      primaryKey: true
+      primaryKey: true,
+      allowNull: false
     },
     store_id: {
       type: DataTypes.INTEGER,
@@ -12,46 +14,146 @@ module.exports = (sequelize, DataTypes) => {
       references: {
         model: 'stores',
         key: 'id'
+      },
+      validate: {
+        notNull: {
+          msg: "El ID de la tienda es requerido"
+        }
       }
     },
     image_url: {
-      type: DataTypes.STRING,
+      type: DataTypes.STRING(500),
       allowNull: false,
       validate: {
-        isUrl: true
+        notNull: {
+          msg: "La URL de la imagen es requerida"
+        },
+        notEmpty: {
+          msg: "La URL no puede estar vacía"
+        },
+        isUrl: {
+          msg: "Debe ser una URL válida"
+        }
       }
     },
-    public_id: DataTypes.STRING,
-    format: DataTypes.STRING(10),
-    width: DataTypes.INTEGER,
-    height: DataTypes.INTEGER,
-    bytes: DataTypes.INTEGER,
+    public_id: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+      comment: 'ID público de Cloudinary'
+    },
+    format: {
+      type: DataTypes.STRING(10),
+      allowNull: true,
+      validate: {
+        isIn: {
+          args: [['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg']],
+          msg: "Formato de imagen no válido"
+        }
+      }
+    },
+    width: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      validate: {
+        min: {
+          args: [1],
+          msg: "El ancho debe ser mayor a 0"
+        }
+      }
+    },
+    height: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      validate: {
+        min: {
+          args: [1],
+          msg: "La altura debe ser mayor a 0"
+        }
+      }
+    },
+    bytes: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      validate: {
+        min: {
+          args: [1],
+          msg: "El tamaño debe ser mayor a 0"
+        }
+      }
+    },
     is_primary: {
       type: DataTypes.BOOLEAN,
-      defaultValue: false
+      allowNull: false,
+      defaultValue: false,
+      validate: {
+        notNull: {
+          msg: "El campo is_primary es requerido"
+        }
+      }
     },
     uploaded_by: {
-      type: DataTypes.INTEGER,
+      type: DataTypes.UUID,
+      allowNull: true,
       references: {
         model: 'users',
         key: 'id'
       }
     },
-    deleted_at: DataTypes.DATE
+    created_at: {
+      type: DataTypes.DATE,
+      allowNull: false,
+      defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
+    },
+    updated_at: {
+      type: DataTypes.DATE,
+      allowNull: false,
+      defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
+    },
+    deleted_at: {
+      type: DataTypes.DATE,
+      allowNull: true
+    }
   }, {
+    sequelize,
+    tableName: 'store_images',
     timestamps: true,
     createdAt: 'created_at',
     updatedAt: 'updated_at',
     paranoid: true, // Habilita borrado lógico
     deletedAt: 'deleted_at',
     underscored: true,
+    freezeTableName: true,
+    schema: 'public',
     indexes: [
       {
-        fields: ['store_id']
+        name: "store_images_pkey",
+        unique: true,
+        fields: [{ name: "id" }]
       },
       {
-        fields: ['store_id', 'is_primary'],
-        where: { is_primary: true }
+        name: "idx_store_images_store_id",
+        fields: [{ name: "store_id" }]
+      },
+      {
+        name: "idx_store_images_uploaded_by",
+        fields: [{ name: "uploaded_by" }]
+      },
+      {
+        name: "idx_store_images_is_primary",
+        fields: [{ name: "is_primary" }]
+      },
+      {
+        name: "idx_store_images_store_primary",
+        unique: true,
+        fields: [{ name: "store_id" }, { name: "is_primary" }],
+        where: {
+          is_primary: true,
+          deleted_at: null
+        }
+      },
+      {
+        name: "idx_store_images_deleted_at",
+        fields: [{ name: "deleted_at" }]
       }
     ]
   });

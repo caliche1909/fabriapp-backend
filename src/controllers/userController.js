@@ -1,4 +1,4 @@
-const { users, roles, permissions, companies } = require('../models');
+const { users, roles, permissions, companies, user_companies } = require('../models');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 
@@ -236,31 +236,121 @@ module.exports = {
         }
     },
 
-    // 📌 Obtener todos los usuarios de tipo vendedor
+    // 📌 Obtener todos los usuarios vendedores de una compañía específica
     async getSellers(req, res) {
-        try {
-            const roleId = 3; // Rol de Vendedor
+        console.log("📌 Intentando obtener vendedores de una compañía...", req.params);
 
-            const usersByRole = await users.findAll({
-                where: { role_id: roleId, status: "active" }, // Solo obtener los vendedores activos
-                attributes: ["id", "email", "name", "phone", "status"], // Solo obtener estos campos
+        try {
+            const { company_id } = req.params;
+
+            // 🔹 Validar parámetro obligatorio
+            if (!company_id) {
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: "No se reconoce a la compañía",
+                    sellers: []
+                });
+            }
+
+            // 🔹 Buscar el rol de vendedor por nombre
+            const sellerRole = await roles.findOne({
+                where: { name: 'SELLER' }
+            });
+
+            if (!sellerRole) {
+                return res.status(404).json({
+                    success: false,
+                    status: 404,
+                    message: "Rol de vendedor no encontrado en el sistema",
+                    sellers: []
+                });
+            }
+
+            // 🔹 Obtener vendedores que están asignados como trabajadores a la compañía específica
+            const sellersList = await users.findAll({
+                where: { 
+                    status: "active" 
+                },
+                attributes: ["id", "email", "first_name", "last_name", "phone", "status"],
                 include: [
                     {
                         model: roles,
                         as: "role",
-                        attributes: ["id", "name"] // Solo obtener el id y el nombre del rol
+                        attributes: ["id", "name"]
+                    },
+                    {
+                        model: user_companies,
+                        as: 'company_assignments',
+                        where: { 
+                            company_id: company_id,
+                            role_id: sellerRole.id,
+                            status: 'active'
+                        },
+                        required: true, // INNER JOIN - solo usuarios con asignación activa
+                        attributes: []  // No necesitamos datos de la asignación
                     }
                 ]
             });
 
-            if (!usersByRole.length) {
-                return res.status(404).json({ message: "No hay vendedores" });
+            // 🔹 Si no hay vendedores, devolver lista vacía (no es un error)
+            if (!sellersList.length) {
+                return res.status(200).json({
+                    success: true,
+                    status: 200,
+                    message: "No hay vendedores asignados a esta compañía aún",
+                    sellers: []
+                    
+                });
             }
 
-            res.status(200).json(usersByRole);
+            // 🔹 Formatear respuesta simplificada
+            const formattedSellers = sellersList.map(seller => {
+                // Procesar el teléfono para separar código de país y número
+                let countryCode = undefined;
+                let phoneNumber = undefined;
+
+                if (seller.phone) {
+                    if (seller.phone.includes('-')) {
+                        [countryCode, phoneNumber] = seller.phone.split('-');
+                    } else {
+                        phoneNumber = seller.phone;
+                    }
+                }
+
+                return {
+                    id: seller.id,
+                    email: seller.email,
+                    name: seller.first_name,
+                    lastName: seller.last_name,
+                    countryCode: countryCode,
+                    phone: phoneNumber,
+                    status: seller.status,
+                    role: {
+                        id: seller.role.id,
+                        name: seller.role.name
+                    }
+                };
+            });
+
+            console.log(`✅ Vendedores obtenidos para compañía ${company_id}:`, formattedSellers.length);
+
+            res.status(200).json({
+                success: true,
+                status: 200,
+                message: "Vendedores obtenidos exitosamente",
+                sellers: formattedSellers
+                
+            });
+
         } catch (error) {
             console.error("❌ Error al obtener vendedores:", error);
-            res.status(500).json({ error: error.message });
+            res.status(500).json({
+                success: false,
+                status: 500,
+                message: "Error al obtener vendedores de la compañía",
+                sellers: []
+            });
         }
     },
 

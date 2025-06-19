@@ -1,6 +1,7 @@
 const Sequelize = require('sequelize');
+
 module.exports = function(sequelize, DataTypes) {
-  return sequelize.define('store_types', {
+  const StoreTypes = sequelize.define('store_types', {
     id: {
       autoIncrement: true,
       type: DataTypes.INTEGER,
@@ -9,28 +10,70 @@ module.exports = function(sequelize, DataTypes) {
     },
     name: {
       type: DataTypes.STRING(50),
-      allowNull: false
+      allowNull: false,
+      unique: "store_types_name_key",
+      validate: {
+        notNull: {
+          msg: "El nombre del tipo de tienda es requerido"
+        },
+        notEmpty: {
+          msg: "El nombre no puede estar vacío"
+        }
+      }
     },
     description: {
       type: DataTypes.TEXT,
       allowNull: true
+    },
+    created_at: {
+      type: DataTypes.DATE,
+      allowNull: false,
+      defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
+    },
+    updated_at: {
+      type: DataTypes.DATE,
+      allowNull: false,
+      defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
     }
   }, {
     sequelize,
     tableName: 'store_types',
-    timestamps: false, 
-    underscored: true, 
+    timestamps: true,
+    underscored: true,
     freezeTableName: true,
     schema: 'public',
-    timestamps: false,
+    createdAt: 'created_at',
+    updatedAt: 'updated_at',
     indexes: [
       {
         name: "store_types_pkey",
         unique: true,
         fields: [
-          { name: "id" },
+          { name: "id" }
         ]
       },
+      {
+        name: "idx_store_types_name",
+        fields: [
+          { name: "name" }
+        ]
+      },
+      {
+        name: "store_types_name_key",
+        unique: true,
+        fields: [
+          { name: "name" }
+        ]
+      }
     ]
   });
+
+  StoreTypes.associate = (models) => {
+    StoreTypes.hasMany(models.stores, {
+      foreignKey: 'store_type_id',
+      as: 'stores'
+    });
+  };
+
+  return StoreTypes;
 };

@@ -6,7 +6,7 @@ const router = express.Router();
 
 // api/stores/
 
-router.post('/create', 
+router.post('/create/:company_id', 
     verifyToken, 
     checkPermission('create_stores_management'), 
     storesController.createStore

@@ -5,13 +5,13 @@ const {verifyToken, checkPermission} = require('../middlewares/jwt.middleware');
 const router = express.Router();
 
 // api/routes/
-router.get('/list', 
+router.get('/list/:company_id', 
     verifyToken, 
     checkPermission('view_routes_management'), 
     routesController.getListRoutes
 );
 
-router.post('/create', 
+router.post('/create/:company_id', 
     verifyToken, 
     checkPermission('create_routes_management'), 
     routesController.createRoute

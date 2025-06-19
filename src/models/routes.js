@@ -1,4 +1,5 @@
 const Sequelize = require('sequelize');
+
 module.exports = function (sequelize, DataTypes) {
   const Routes = sequelize.define('routes', {
     id: {
@@ -9,63 +10,112 @@ module.exports = function (sequelize, DataTypes) {
     },
     name: {
       type: DataTypes.STRING(100),
-      allowNull: false
+      allowNull: false,
+      validate: {
+        notNull: {
+          msg: "El nombre de la ruta es requerido"
+        },
+        notEmpty: {
+          msg: "El nombre no puede estar vacío"
+        }
+      }
+    },
+    company_id: {
+      type: DataTypes.UUID,
+      allowNull: false,
+      references: {
+        model: 'companies',
+        key: 'id'
+      },
+      validate: {
+        notNull: {
+          msg: "El ID de la compañía es requerido"
+        }
+      }
     },
     user_id: {
-      type: DataTypes.INTEGER,
+      type: DataTypes.UUID,
       allowNull: true,
       references: {
         model: 'users',
         key: 'id'
       }
     },
-    created_at: {
-      type: DataTypes.DATE,
-      allowNull: false,
-      defaultValue: Sequelize.literal('CURRENT_TIMESTAMP') // 🔹 Ahora guarda la fecha automáticamente
-    },
     working_days: {
-      // Se define como un array de enum con los días permitidos
       type: DataTypes.ARRAY(
         DataTypes.ENUM('domingo', 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado')
       ),
-      allowNull: true // o false si quieres que sea obligatorio
+      allowNull: true
+    },
+    created_at: {
+      type: DataTypes.DATE,
+      allowNull: false,
+      defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
+    },
+    updated_at: {
+      type: DataTypes.DATE,
+      allowNull: false,
+      defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
     }
   }, {
     sequelize,
     tableName: 'routes',
-    timestamps: false, // ❌ No activamos `timestamps` porque queremos solo `created_at`
+    timestamps: true,
     underscored: true,
     freezeTableName: true,
     schema: 'public',
+    createdAt: 'created_at',
+    updatedAt: 'updated_at',
     indexes: [
       {
         name: "routes_pkey",
         unique: true,
         fields: [
-          { name: "id" },
+          { name: "id" }
+        ]
+      },
+      {
+        name: "idx_routes_company_id",
+        fields: [
+          { name: "company_id" }
         ]
       },
       {
         name: "idx_routes_user_id",
-        fields: [{ name: "user_id" }]
+        fields: [
+          { name: "user_id" }
+        ]
+      },
+      {
+        name: "idx_routes_company_user",
+        fields: [
+          { name: "company_id" },
+          { name: "user_id" }
+        ]
+      },
+      {
+        name: "idx_routes_name",
+        fields: [
+          { name: "name" }
+        ]
       }
     ]
   });
 
-  // Asociación: Una ruta puede pertenecer a un usuario (o estar huérfana)
   Routes.associate = (models) => {
+    Routes.belongsTo(models.companies, {
+      foreignKey: 'company_id',
+      as: 'company'
+    });
 
-    // 🔹 Relación con users: Una ruta pertenece a un usuario
     Routes.belongsTo(models.users, {
       foreignKey: 'user_id',
       as: 'seller'
     });
 
-    // 🔹 Relación con stores: Una ruta tiene muchas tiendas
     Routes.hasMany(models.stores, {
       foreignKey: "route_id",
-      as: "stores" // 👈 Este alias es el que usaremos en `include` en la consulta
+      as: "stores"
     });
   };
 

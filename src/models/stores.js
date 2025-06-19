@@ -1,4 +1,5 @@
 const Sequelize = require('sequelize');
+
 module.exports = function (sequelize, DataTypes) {
   const Stores = sequelize.define('stores', {
     id: {
@@ -9,15 +10,44 @@ module.exports = function (sequelize, DataTypes) {
     },
     name: {
       type: DataTypes.STRING(100),
-      allowNull: false
+      allowNull: false,
+      validate: {
+        notNull: {
+          msg: "El nombre de la tienda es requerido"
+        },
+        notEmpty: {
+          msg: "El nombre no puede estar vacío"
+        }
+      }
     },
     address: {
       type: DataTypes.STRING(255),
-      allowNull: false
+      allowNull: false,
+      validate: {
+        notNull: {
+          msg: "La dirección es requerida"
+        },
+        notEmpty: {
+          msg: "La dirección no puede estar vacía"
+        }
+      }
     },
     phone: {
       type: DataTypes.STRING(20),
       allowNull: true
+    },
+    company_id: {
+      type: DataTypes.UUID,
+      allowNull: false,
+      references: {
+        model: 'companies',
+        key: 'id'
+      },
+      validate: {
+        notNull: {
+          msg: "El ID de la compañía es requerido"
+        }
+      }
     },
     route_id: {
       type: DataTypes.INTEGER,
@@ -28,7 +58,7 @@ module.exports = function (sequelize, DataTypes) {
       }
     },
     manager_id: {
-      type: DataTypes.INTEGER,
+      type: DataTypes.UUID,
       allowNull: true,
       references: {
         model: 'users',
@@ -41,22 +71,23 @@ module.exports = function (sequelize, DataTypes) {
       references: {
         model: 'store_types',
         key: 'id'
+      },
+      validate: {
+        notNull: {
+          msg: "El tipo de tienda es requerido"
+        }
       }
     },
-    latitude: {
-      type: DataTypes.DECIMAL(23, 20),
-      allowNull: true
-    },
-    longitude: {
-      type: DataTypes.DECIMAL(24, 20),
+    ubicacion: {
+      type: DataTypes.GEOMETRY('POINT', 4326),
       allowNull: true
     },
     opening_time: {
-      type: DataTypes.TIME,
+      type: DataTypes.STRING(50),
       allowNull: true
     },
     closing_time: {
-      type: DataTypes.TIME,
+      type: DataTypes.STRING(50),
       allowNull: true
     },
     city: {
@@ -75,6 +106,16 @@ module.exports = function (sequelize, DataTypes) {
       type: DataTypes.STRING(100),
       allowNull: true
     },
+    created_at: {
+      type: DataTypes.DATE,
+      allowNull: false,
+      defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
+    },
+    updated_at: {
+      type: DataTypes.DATE,
+      allowNull: false,
+      defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
+    }
   }, {
     sequelize,
     tableName: 'stores',
@@ -82,12 +123,21 @@ module.exports = function (sequelize, DataTypes) {
     underscored: true,
     freezeTableName: true,
     schema: 'public',
+    createdAt: 'created_at',
+    updatedAt: 'updated_at',
     hasTrigger: true,
     indexes: [
       {
-        name: "idx_stores_manager_id",
+        name: "stores_pkey",
+        unique: true,
         fields: [
-          { name: "manager_id" }
+          { name: "id" }
+        ]
+      },
+      {
+        name: "idx_stores_company_id",
+        fields: [
+          { name: "company_id" }
         ]
       },
       {
@@ -97,23 +147,102 @@ module.exports = function (sequelize, DataTypes) {
         ]
       },
       {
+        name: "idx_stores_manager_id",
+        fields: [
+          { name: "manager_id" }
+        ]
+      },
+      {
         name: "idx_stores_store_type_id",
         fields: [
           { name: "store_type_id" }
         ]
       },
       {
-        name: "stores_pkey",
-        unique: true,
+        name: "idx_stores_name",
         fields: [
-          { name: "id" }
+          { name: "name" }
         ]
       },
+      {
+        name: "idx_stores_company_route",
+        fields: [
+          { name: "company_id" },
+          { name: "route_id" }
+        ]
+      },
+      {
+        name: "idx_stores_ubicacion",
+        using: 'GIST',
+        fields: [
+          { name: "ubicacion" }
+        ]
+      },
+      {
+        name: "idx_stores_company_address_unique",
+        unique: true,
+        fields: [
+          { name: "company_id" },
+          { name: "address" }
+        ]
+      }
     ]
   });
 
-  // Asociaciones
+  Stores.prototype.setUbicacion = function(lat, lng) {
+    return sequelize.fn('ST_SetSRID', 
+      sequelize.fn('ST_MakePoint', lng, lat), 
+      4326
+    );
+  };
+
+  Stores.prototype.getLatitud = function() {
+    if (this.ubicacion) {
+      return sequelize.fn('ST_Y', this.ubicacion);
+    }
+    return null;
+  };
+
+  Stores.prototype.getLongitud = function() {
+    if (this.ubicacion) {
+      return sequelize.fn('ST_X', this.ubicacion);
+    }
+    return null;
+  };
+
+  Stores.findByProximity = function(lat, lng, radiusKm = 5) {
+    const punto = sequelize.fn('ST_SetSRID', 
+      sequelize.fn('ST_MakePoint', lng, lat), 
+      4326
+    );
+    
+    return this.findAll({
+      where: sequelize.where(
+        sequelize.fn('ST_DWithin', 
+          sequelize.col('ubicacion'), 
+          punto, 
+          radiusKm / 111.32
+        ), 
+        true
+      ),
+      attributes: {
+        include: [
+          [sequelize.fn('ST_Distance', 
+            sequelize.col('ubicacion'), 
+            punto
+          ) * 111320, 'distancia_metros']
+        ]
+      },
+      order: [[sequelize.literal('distancia_metros'), 'ASC']]
+    });
+  };
+
   Stores.associate = (models) => {
+    Stores.belongsTo(models.companies, {
+      foreignKey: 'company_id',
+      as: 'company'
+    });
+
     Stores.belongsTo(models.routes, {
       foreignKey: 'route_id',
       as: 'route'
