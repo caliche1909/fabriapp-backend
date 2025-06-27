@@ -18,6 +18,7 @@ var _supplier_companies = require("./supplier_companies");
 var _supplier_verifications = require("./supplier_verifications");
 var _supplies_stock = require("./supplies_stock");
 var _inventory_supplies_balance = require("./inventory_supplies_balance"); // 📌 Agregado
+var _user_current_position = require("./user_current_position");
 var _users = require("./users");
 var _work_areas = require("./work_areas");
 
@@ -41,6 +42,7 @@ function initModels(sequelize) {
   var supplier_verifications = _supplier_verifications(sequelize, DataTypes);
   var supplies_stock = _supplies_stock(sequelize, DataTypes);
   var inventory_supplies_balance = _inventory_supplies_balance(sequelize, DataTypes); // 📌 Agregado
+  var user_current_position = _user_current_position(sequelize, DataTypes);
   var users = _users(sequelize, DataTypes);
   var work_areas = _work_areas(sequelize, DataTypes);
 
@@ -108,6 +110,10 @@ function initModels(sequelize) {
   supplier_verifications.belongsTo(companies, { as: "verifying_company", foreignKey: "company_id" });
   companies.hasMany(supplier_verifications, { as: "supplier_verifications", foreignKey: "company_id" });
 
+  // ✅ Relaciones para user_current_position
+  user_current_position.belongsTo(users, { as: "user", foreignKey: "user_id", onDelete: "CASCADE" });
+  users.hasOne(user_current_position, { as: "current_position", foreignKey: "user_id", onDelete: "CASCADE" });
+
   return {
     SequelizeMeta,
     companies,
@@ -128,6 +134,7 @@ function initModels(sequelize) {
     supplier_verifications,
     supplies_stock,
     inventory_supplies_balance,
+    user_current_position,
     users,
     work_areas,
   };

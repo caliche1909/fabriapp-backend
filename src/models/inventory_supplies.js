@@ -153,6 +153,13 @@ module.exports = function (sequelize, DataTypes) {
       as: 'supplier',
       onDelete: 'SET NULL'
     });
+
+    // ✅ Relación con inventory_supplies_balance (uno a uno)
+    InventorySupplies.hasOne(models.inventory_supplies_balance, {
+      foreignKey: 'inventory_supply_id',
+      as: 'balance',
+      onDelete: 'CASCADE'
+    });
   };
 
   // 3. Retornar el modelo configurado

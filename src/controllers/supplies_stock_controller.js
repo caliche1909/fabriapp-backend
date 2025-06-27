@@ -1,5 +1,5 @@
 const { config } = require('dotenv');
-const { supplies_stock, inventory_supplies, users, roles } = require('../models');
+const { supplies_stock, inventory_supplies, users } = require('../models');
 const { or } = require('sequelize');
 
 module.exports = {
@@ -55,7 +55,7 @@ module.exports = {
 
             console.log(`🔍 Buscando movimientos de stock para el insumo ID: ${supplyId}`);
 
-            // Consultar los últimos 50 movimientos de stock del insumo específico
+            // 🔥 CONSULTA SIMPLIFICADA: Solo usuario, sin roles
             const stockMovements = await supplies_stock.findAll({
                 where: { inventory_supply_id: supplyId },
                 attributes: [
@@ -71,19 +71,14 @@ module.exports = {
                         model: users,
                         as: "user",
                         attributes: ["id", "first_name", "last_name"],
-                        required: false, // Hacer la relación opcional
-                        include: [{
-                            model: roles,
-                            as: "role",
-                            attributes: ["id", "name"]
-                        }]
+                        required: false // Hacer la relación opcional
                     }
                 ],
                 order: [['transaction_date', 'DESC']], // Del más reciente al más antiguo
                 limit: 50 // Máximo 50 registros
             });
 
-            // Formatear la respuesta según el formato solicitado
+            // 🔥 FORMATEO SIMPLIFICADO: Sin roles específicos
             const formattedMovements = stockMovements.map(movement => ({
                 id: movement.id,
                 inventory_supply_id: movement.inventory_supply_id,
@@ -95,11 +90,7 @@ module.exports = {
                 user: movement.user ? {
                     id: movement.user.id,
                     name: movement.user.first_name,
-                    lastName: movement.user.last_name,
-                    role: movement.user.role ? {
-                        id: movement.user.role.id,
-                        name: movement.user.role.name
-                    } : null
+                    lastName: movement.user.last_name
                 } : null
             }));
 

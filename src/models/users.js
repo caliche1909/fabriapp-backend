@@ -76,18 +76,15 @@ module.exports = function (sequelize, DataTypes) {
         }
       }
     },
-    role_id: {
-      type: DataTypes.UUID,
-      allowNull: false,
-      references: {
-        model: 'roles',
-        key: 'id'
-      },
+    image_url: {
+      type: DataTypes.STRING(500),
+      allowNull: true,
       validate: {
-        notNull: {
-          msg: "El rol es requerido"
+        isUrl: {
+          msg: "Debe ser una URL válida"
         }
-      }
+      },
+      comment: 'URL de la imagen de perfil del usuario almacenada en la web'
     },
     status: {
       type: DataTypes.STRING(10),
@@ -103,6 +100,24 @@ module.exports = function (sequelize, DataTypes) {
     is_verified: {
       type: DataTypes.BOOLEAN,
       defaultValue: false
+    },
+    require_geolocation: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      comment: 'Indica si el usuario requiere tracking de geolocalización en tiempo real'
+    },
+    session_status: {
+      type: DataTypes.STRING(20),
+      allowNull: false,
+      defaultValue: 'offline',
+      validate: {
+        isIn: {
+          args: [['offline', 'online']],
+          msg: "El estado de sesión debe ser 'offline' u 'online'"
+        }
+      },
+      comment: 'Estado actual de la sesión del usuario'
     },
     last_login: {
       type: DataTypes.DATE,
@@ -129,10 +144,6 @@ module.exports = function (sequelize, DataTypes) {
     updatedAt: 'updated_at',
     indexes: [
       {
-        name: "idx_users_role_id",
-        fields: [{ name: "role_id" }]
-      },
-      {
         name: "idx_users_status",
         fields: [{ name: "status" }]
       },
@@ -149,6 +160,17 @@ module.exports = function (sequelize, DataTypes) {
         name: "users_phone_key",
         unique: true,
         fields: [{ name: "phone" }]
+      },
+      {
+        name: "idx_users_session_status",
+        fields: [{ name: "session_status" }]
+      },
+      {
+        name: "idx_users_image_url",
+        fields: [{ name: "image_url" }],
+        where: {
+          image_url: { [Sequelize.Op.ne]: null }
+        }
       }
     ],
     hooks: {
@@ -182,37 +204,73 @@ module.exports = function (sequelize, DataTypes) {
     await this.save();
   };
 
+  // Método para activar geolocalización
+  Users.prototype.enableGeolocation = async function () {
+    this.require_geolocation = true;
+    await this.save();
+  };
+
+  // Método para desactivar geolocalización
+  Users.prototype.disableGeolocation = async function () {
+    this.require_geolocation = false;
+    await this.save();
+  };
+
+  // Método para verificar si tiene geolocalización activa
+  Users.prototype.hasActiveGeolocation = function () {
+    return this.require_geolocation === true;
+  };
+
+  // Método para actualizar imagen de perfil
+  Users.prototype.updateProfileImage = async function (imageUrl) {
+    this.image_url = imageUrl;
+    await this.save();
+  };
+
+  // Método para eliminar imagen de perfil
+  Users.prototype.removeProfileImage = async function () {
+    this.image_url = null;
+    await this.save();
+  };
+
+  // Método para verificar si tiene imagen de perfil
+  Users.prototype.hasProfileImage = function () {
+    return this.image_url !== null && this.image_url !== '';
+  };
+
+  // Método para obtener URL de imagen o imagen por defecto
+  Users.prototype.getProfileImageUrl = function (defaultImageUrl = null) {
+    return this.image_url || defaultImageUrl;
+  };
+
   // Método para obtener todas las compañías del usuario (propias y asignadas)
   Users.prototype.getAllCompanies = async function() {
-    const { owned_companies } = await Users.findByPk(this.id, {
-      include: [{
-        model: sequelize.models.companies,
-        as: 'owned_companies'
-      }]
-    });
-
-    const { company_assignments } = await Users.findByPk(this.id, {
-      include: [{
-        model: sequelize.models.user_companies,
-        as: 'company_assignments',
-        include: [{
+    const userCompaniesData = await sequelize.models.user_companies.findAll({
+      where: { 
+        user_id: this.id,
+        status: 'active'
+      },
+      include: [
+        {
           model: sequelize.models.companies,
           as: 'company'
-        }]
-      }]
+        },
+        {
+          model: sequelize.models.roles,
+          as: 'role'
+        }
+      ]
     });
 
-    const assignedCompanies = company_assignments.map(uc => uc.company);
-    return [...owned_companies, ...assignedCompanies];
+    return userCompaniesData.map(userCompany => ({
+      ...userCompany.company.toJSON(),
+      userType: userCompany.user_type, // 'owner' o 'collaborator'
+      userRole: userCompany.role ? userCompany.role.name : 'COLLABORATOR'
+    }));
   };
 
   // Relaciones
   Users.associate = (models) => {
-    Users.belongsTo(models.roles, {
-      foreignKey: 'role_id',
-      as: 'role'
-    });
-
     Users.hasMany(models.supplies_stock, {
       foreignKey: 'user_id',
       as: 'movements'
@@ -221,12 +279,6 @@ module.exports = function (sequelize, DataTypes) {
     Users.hasMany(models.routes, {
       foreignKey: 'user_id',
       as: 'routes'
-    });
-
-    // Relación con companies como propietario
-    Users.hasMany(models.companies, {
-      foreignKey: 'owner_id',
-      as: 'owned_companies'
     });
 
     // Relación con user_companies
@@ -241,6 +293,12 @@ module.exports = function (sequelize, DataTypes) {
       foreignKey: 'user_id',
       otherKey: 'company_id',
       as: 'assigned_companies'
+    });
+
+    // Relación con user_current_position
+    Users.hasOne(models.user_current_position, {
+      foreignKey: 'user_id',
+      as: 'current_position'
     });
   };
 

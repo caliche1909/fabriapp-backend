@@ -9,7 +9,7 @@ const router = express.Router();
 // 📌 Ruta para obtener balances por compañía
 router.get('/list/:company_id', 
     verifyToken, 
-    checkPermission('view_supplies_stock'), 
+    checkPermission('view-supplies-stock'), // permiso en la base de datos para ver los balances de inventario de insumos
     inventory_supplies_balanceController.getListInventorySuppliesBalance
 );
 

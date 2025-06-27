@@ -5,89 +5,6 @@ const SALT_ROUNDS = 10;
 
 module.exports = {
 
-    // 📌 Método para obtener todas las tiendas que le pertenecen a una ruta
-    async getStoresbyRoute(req, res) {
-
-        const { route_id } = req.params;
-
-        try {
-            // Obtener todas las tiendas con sus relaciones completas (store_type y manager)
-            const allStores = await stores.findAll({
-                where: { route_id: route_id },
-                attributes: [
-                    'id',
-                    'name',
-                    'address',
-                    'phone',
-                    'neighborhood',
-                    'route_id',
-                    // 🗺️ Extraer coordenadas del campo PostGIS ubicacion
-                    [stores.sequelize.fn('ST_Y', stores.sequelize.col('ubicacion')), 'latitude'],
-                    [stores.sequelize.fn('ST_X', stores.sequelize.col('ubicacion')), 'longitude'],
-                    'opening_time',
-                    'closing_time',
-                    'city',
-                    'state',
-                    'country',
-                ],
-                include: [
-                    {
-                        association: 'store_type',
-                        as: 'store_type',
-                        attributes: ['id', 'name']
-                    },
-                    {
-                        association: 'manager',
-                        as: 'manager',
-                        attributes: ['id', 'first_name', 'last_name', 'email', 'phone', 'status']
-                    },
-                    {
-                        association: 'images',
-                        as: 'images',
-                        attributes: ['id', 'image_url', 'public_id', 'is_primary'],
-                    }
-                ]
-            });
-
-            // 🎨 Formatear respuesta para el frontend
-            const formattedStores = allStores.map(store => {
-                const storeData = store.toJSON();
-
-                // Formatear manager si existe
-                if (storeData.manager) {
-                    let countryCode = undefined;
-                    let phoneNumber = undefined;
-
-                    if (storeData.manager.phone) {
-                        if (storeData.manager.phone.includes('-')) {
-                            [countryCode, phoneNumber] = storeData.manager.phone.split('-');
-                        } else {
-                            phoneNumber = storeData.manager.phone;
-                        }
-                    }
-
-                    storeData.manager = {
-                        id: storeData.manager.id,
-                        name: storeData.manager.first_name,
-                        lastName: storeData.manager.last_name,
-                        email: storeData.manager.email,
-                        countryCode: countryCode,
-                        phone: phoneNumber,
-                        status: storeData.manager.status
-                    };
-                }
-
-                return storeData;
-            });
-
-            // Devolver todas las tiendas con sus relaciones
-            return res.status(200).json(formattedStores);
-        } catch (error) {
-            console.error("❌ Error al obtener tiendas:", error);
-            return res.status(500).json({ error: "Error al obtener tiendas." });
-        }
-    },
-
     // 📌 Método para crear una tienda con o sin usuario (TRANSACCIONAL)
     async createStore(req, res) {
         // 🔄 Iniciar transacción para garantizar atomicidad
@@ -97,7 +14,7 @@ module.exports = {
             // 🔸 PASO 1: Extraer company_id de los parámetros y datos del request body
             const { company_id } = req.params;
             const { store, user } = req.body;
-            console.log("USUARIO QUE LLEGA DEL FRONTEND", user);
+           
 
             // 🔸 PASO 2: Validar que company_id esté presente en la URL
             if (!company_id) {
@@ -112,7 +29,7 @@ module.exports = {
             // 🔸 PASO 3: Validar que vengan los datos mínimos de la tienda
             const { name, address, store_type_id, neighborhood, latitude, longitude, route_id } = store || {};
 
-            
+
 
             if (!name || !address || !store_type_id || !neighborhood) {
                 await transaction.rollback();
@@ -121,7 +38,7 @@ module.exports = {
                     status: 400,
                     message: "Faltan datos esenciales para crear la tienda.",
                 });
-            }            
+            }
 
             // 🔸 PASO 4: Asignar company_id al objeto store
             store.company_id = company_id;
@@ -264,13 +181,21 @@ module.exports = {
             const createdStore = await stores.findOne({
                 where: { id: newStore.id },
                 attributes: [
-                    'id', 'name', 'address', 'phone', 'neighborhood', 'route_id',
+                    'id',
+                    'name',
+                    'address',
+                    'phone',
+                    'neighborhood',
+                    'route_id',
                     'company_id', // Incluir company_id en la respuesta
                     // 🗺️ Extraer coordenadas del campo PostGIS ubicacion
                     [stores.sequelize.fn('ST_Y', stores.sequelize.col('ubicacion')), 'latitude'],
                     [stores.sequelize.fn('ST_X', stores.sequelize.col('ubicacion')), 'longitude'],
-                    'opening_time', 'closing_time',
-                    'city', 'state', 'country'
+                    'opening_time',
+                    'closing_time',
+                    'city',
+                    'state',
+                    'country'
                 ],
                 include: [
                     {
@@ -281,23 +206,7 @@ module.exports = {
                     {
                         association: 'manager',
                         as: 'manager',
-                        attributes: ['id', 'first_name', 'last_name', 'email', 'phone', 'status'],
-                        include: [{
-                            association: 'role',
-                            as: 'role',
-                            attributes: ['id', 'name']
-                        }]
-                    },
-                    {
-                        association: 'company',
-                        as: 'company',
-                        attributes: ['id', 'name']
-                    },
-                    {
-                        association: 'route',
-                        as: 'route',
-                        attributes: ['id', 'name'],
-                        required: false // LEFT JOIN para que funcione si route_id es null
+                        attributes: ['id', 'first_name', 'last_name', 'email', 'phone', 'status']
                     }
                 ],
                 transaction
@@ -326,8 +235,7 @@ module.exports = {
                     email: storeData.manager.email,
                     countryCode: countryCode,
                     phone: phoneNumber,
-                    status: storeData.manager.status,
-                    role: storeData.manager.role // Incluir rol completo
+                    status: storeData.manager.status
                 };
             }
 
@@ -357,13 +265,13 @@ module.exports = {
                             return res.status(400).json({
                                 success: false,
                                 status: 400,
-                                message: "El email del manager ya está registrado en el sistema.",
+                                message: "El email del ADMIN ya está registrado en el sistema.",
                             });
                         case 'users_phone_key':
                             return res.status(400).json({
                                 success: false,
                                 status: 400,
-                                message: "El teléfono del manager ya está registrado en el sistema.",
+                                message: "El teléfono del ADMIN ya está registrado en el sistema.",
                             });
                         case 'idx_stores_company_address_unique':
                             return res.status(400).json({
@@ -421,8 +329,6 @@ module.exports = {
                 });
             }
 
-            // Se espera que el body tenga dos propiedades: newStore y newUser
-
 
             // Extraer todos los campos necesarios del body
             let {
@@ -438,8 +344,7 @@ module.exports = {
                 city,
                 state,
                 country,
-                store_type_id,
-                manager_id
+                store_type_id
             } = newStore;
 
 
@@ -470,19 +375,23 @@ module.exports = {
                     return res.status(400).json({
                         success: false,
                         status: 400,
-                        message: "Ya existe otra tienda registrada en esta dirección para su compañía.",
+                        message: "Ya existe otra tienda registrada en la dirección indicada.",
                     });
                 }
             }
 
-            // Transformar el nombre: eliminar espacios extra y convertir a mayúsculas
-            let transformedName = name.trim().replace(/\s+/g, ' ').toUpperCase();
+            // 🔸 PASO 5: Procesar y limpiar nombre y barrio (igual que createStore)
+            store.name = name.trim().replace(/\s+/g, ' ').toUpperCase();
+            store.neighborhood = neighborhood
+                .trim()
+                .replace(/\s+/g, ' ')
+                .split(' ')
+                .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+                .join(' ');
 
             // Actualizar los campos de la tienda (manteniendo los que no se envían)
-            store.name = transformedName || store.name;
             store.address = address || store.address;
             store.phone = phone || store.phone;
-            store.neighborhood = neighborhood;
             store.route_id = route_id !== undefined ? route_id : store.route_id;
 
             // 🗺️ Actualizar ubicación PostGIS si llegan coordenadas
@@ -506,61 +415,106 @@ module.exports = {
             store.country = country || store.country;
             store.store_type_id = store_type_id || store.store_type_id;
 
-            // Procesar el objeto newUser, si se envía
+            // 🔸 PASO 7: Procesar el objeto newUser, si se envía (crear o actualizar manager)
             if (newUser) {
-                // 🔍 Buscar el rol STORE_MANAGER dinámicamente
-                const storeManagerRole = await roles.findOne({
-                    where: { name: 'STORE_MANAGER' },
-                    transaction
-                });
-
-                if (!storeManagerRole) {
+                // Validar datos obligatorios del usuario
+                if (!newUser.name || !newUser.email || !newUser.phone || !newUser.countryCode) {
                     await transaction.rollback();
-                    return res.status(500).json({
+                    return res.status(400).json({
                         success: false,
-                        status: 500,
-                        message: "Ups! No se pudo crear el manager de la tienda.",
+                        status: 400,
+                        message: "Faltan datos obligatorios en el ADMIN de la tienda.",
                     });
                 }
+
+
 
                 const password = "PanificadoraSiloe.2025";
                 const defaultPassword = await bcrypt.hash(password, SALT_ROUNDS);
 
-                if (store.manager_id) {
-                    // Si la tienda ya tiene manager, buscarlo y actualizarlo
-                    const existingManager = await users.findByPk(store.manager_id, { transaction });
-                    if (existingManager) {
-                        existingManager.first_name = newUser.first_name || newUser.name;
-                        existingManager.last_name = newUser.last_name || newUser.lastName || '';
-                        existingManager.email = newUser.email;
-                        existingManager.phone = newUser.countryCode ? `${newUser.countryCode}-${newUser.phone}` : newUser.phone;
-                        existingManager.status = newUser.status || 'inactive';
-
-                        await existingManager.save({ transaction });
-                    } else {
-                        // En el caso poco frecuente que manager_id esté asignado pero no se encuentre el registro
-                        const createdManager = await users.create({
-                            first_name: newUser.first_name || newUser.name,
-                            last_name: newUser.last_name || newUser.lastName || '',
-                            email: newUser.email,
-                            phone: `${newUser.countryCode}-${newUser.phone}`,
-                            status: newUser.status || 'inactive',
-                            role_id: storeManagerRole.id,
-                            password: defaultPassword,
-                        }, { transaction });
-                        store.manager_id = createdManager.id;
+                if (newUser.id) {
+                    // 📝 CASO 1: Actualizar usuario existente (futuro)
+                    const existingUser = await users.findByPk(newUser.id, { transaction });
+                    if (!existingUser) {
+                        await transaction.rollback();
+                        return res.status(404).json({
+                            success: false,
+                            status: 404,
+                            message: "El ADMIN de la tienda no existe.",
+                        });
                     }
+
+                    // Actualizar datos del usuario existente
+                    existingUser.first_name = newUser.name.split(' ')[0] || existingUser.first_name;
+                    existingUser.last_name = newUser.name.split(' ')[1] || existingUser.last_name;
+                    existingUser.email = newUser.email || existingUser.email;
+                    existingUser.phone = `${newUser.countryCode}-${newUser.phone}` || existingUser.phone;
+                    existingUser.status = newUser.status || existingUser.status;
+                    await existingUser.save({ transaction });
+
+                    // Asegurar que la tienda tenga este usuario como manager
+                    store.manager_id = existingUser.id;
+
                 } else {
-                    // Si no existe manager para la tienda, se crea uno nuevo
+                    // 🆕 CASO 2: Crear nuevo usuario manager (caso actual del frontend)
+                    // 🔍 Buscar el rol STORE_MANAGER dinámicamente
+                    const storeManagerRole = await roles.findOne({
+                        where: { name: 'STORE_MANAGER' },
+                        transaction
+                    });
+
+                    if (!storeManagerRole) {
+                        await transaction.rollback();
+                        return res.status(500).json({
+                            success: false,
+                            status: 500,
+                            message: "No se pudo asignar el rol de manager de la tienda.",
+                        });
+                    }
+
+                    // Verificar que el email no esté en uso
+                    const existingUserByEmail = await users.findOne({
+                        where: { email: newUser.email },
+                        transaction
+                    });
+
+                    if (existingUserByEmail) {
+                        await transaction.rollback();
+                        return res.status(400).json({
+                            success: false,
+                            status: 400,
+                            message: "El email del ADMIN ya está en uso.",
+                        });
+                    }
+
+                    // Verificar que el teléfono no esté en uso
+                    const phoneToCheck = `${newUser.countryCode}-${newUser.phone}`;
+                    const existingUserByPhone = await users.findOne({
+                        where: { phone: phoneToCheck },
+                        transaction
+                    });
+
+                    if (existingUserByPhone) {
+                        await transaction.rollback();
+                        return res.status(400).json({
+                            success: false,
+                            status: 400,
+                            message: "El teléfono del ADMIN ya está en uso.",
+                        });
+                    }
+
+                    // Crear nuevo usuario manager
                     const createdManager = await users.create({
-                        first_name: newUser.first_name || newUser.name,
-                        last_name: newUser.last_name || newUser.lastName || '',
+                        first_name: newUser.name.split(' ')[0] || 'Desconocido',
+                        last_name: newUser.name.split(' ')[1] || 'Desconocido',
                         email: newUser.email,
-                        phone: `${newUser.countryCode}-${newUser.phone}`,
-                        status: newUser.status || 'inactive',
-                        role_id: storeManagerRole.id,
+                        phone: phoneToCheck,
+                        role_id: storeManagerRole.id, // ✅ Asignar rol STORE_MANAGER
                         password: defaultPassword,
+                        status: newUser.status || "inactive"
                     }, { transaction });
+
+                    // ✅ Asignar el nuevo manager a la tienda
                     store.manager_id = createdManager.id;
                 }
             }
@@ -568,7 +522,7 @@ module.exports = {
             // Guardar los cambios de la tienda en la base de datos
             const newStoreRecord = await store.save({ transaction });
 
-            // Obtener la tienda actualizada con sus relaciones completas (store_type y manager)
+            // 🔸 PASO 9: Consultar la tienda actualizada con todas sus relaciones (igual que createStore)
             const updatedStore = await stores.findOne({
                 where: { id: newStoreRecord.id },
                 attributes: [
@@ -578,102 +532,7 @@ module.exports = {
                     'phone',
                     'neighborhood',
                     'route_id',
-                    // 🗺️ Extraer coordenadas del campo PostGIS ubicacion
-                    [stores.sequelize.fn('ST_Y', stores.sequelize.col('ubicacion')), 'latitude'],
-                    [stores.sequelize.fn('ST_X', stores.sequelize.col('ubicacion')), 'longitude'],
-                    'opening_time',
-                    'closing_time',
-                    'city',
-                    'state',
-                    'country'
-                ],
-                include: [
-                    {
-                        association: 'store_type',
-                        as: 'store_type',
-                        attributes: ['id', 'name']
-                    },
-                    {
-                        association: 'manager',
-                        as: 'manager',
-                        attributes: ['id', 'first_name', 'last_name', 'email', 'phone', 'status'],
-                        include: [{
-                            association: 'role',
-                            as: 'role',
-                            attributes: ['id', 'name']
-                        }]
-                    }
-                ],
-                transaction
-            });
-
-            // 🎨 Formatear respuesta para el frontend
-            const storeData = updatedStore.toJSON();
-
-            // Formatear manager si existe
-            if (storeData.manager) {
-                let countryCode = undefined;
-                let phoneNumber = undefined;
-
-                if (storeData.manager.phone) {
-                    if (storeData.manager.phone.includes('-')) {
-                        [countryCode, phoneNumber] = storeData.manager.phone.split('-');
-                    } else {
-                        phoneNumber = storeData.manager.phone;
-                    }
-                }
-
-                storeData.manager = {
-                    id: storeData.manager.id,
-                    name: storeData.manager.first_name,
-                    lastName: storeData.manager.last_name,
-                    email: storeData.manager.email,
-                    countryCode: countryCode,
-                    phone: phoneNumber,
-                    status: storeData.manager.status,
-                    role: storeData.manager.role
-                };
-            }
-
-            // Agregar array de imágenes vacío para satisfacer interfaz Store
-            storeData.images = [];
-
-            // Confirmar transacción
-            await transaction.commit();
-
-            console.log("✅ Tienda actualizada:", storeData);
-            return res.status(200).json({
-                success: true,
-                status: 200,
-                message: "Tienda actualizada exitosamente",
-                data: storeData
-            });
-        } catch (error) {
-            // Rollback en caso de error
-            await transaction.rollback();
-            console.error("❌ Error al actualizar tienda:", error);
-            return res.status(500).json({
-                success: false,
-                status: 500,
-                message: "Error interno del servidor al actualizar la tienda."
-            });
-        }
-    },
-
-    // 📌 Método para obtener la lista de tiendas huerfanas
-    async getOrphanStores(req, res) {
-        console.log("📌 Intentando obtener todas las tiendas huérfanas...");
-
-        try {
-            // Obtener todas las tiendas huérfanas (sin ruta asociada)
-            const orphanStores = await stores.findAll({
-                where: { route_id: null },
-                attributes: [
-                    'id',
-                    'name',
-                    'address',
-                    'phone',
-                    'neighborhood',
+                    'company_id', // Incluir company_id en la respuesta
                     // 🗺️ Extraer coordenadas del campo PostGIS ubicacion
                     [stores.sequelize.fn('ST_Y', stores.sequelize.col('ubicacion')), 'latitude'],
                     [stores.sequelize.fn('ST_X', stores.sequelize.col('ubicacion')), 'longitude'],
@@ -694,19 +553,163 @@ module.exports = {
                         as: 'manager',
                         attributes: ['id', 'first_name', 'last_name', 'email', 'phone', 'status']
                     },
+                ],
+                transaction
+            });
+
+            // 🔸 PASO 10: Formatear respuesta para satisfacer la interfaz Store del frontend (igual que createStore)
+            const storeData = updatedStore.toJSON();
+
+            // Formatear manager si existe para satisfacer interfaz User
+            if (storeData.manager) {
+                let countryCode = undefined;
+                let phoneNumber = undefined;
+
+                if (storeData.manager.phone) {
+                    if (storeData.manager.phone.includes('-')) {
+                        [countryCode, phoneNumber] = storeData.manager.phone.split('-');
+                    } else {
+                        phoneNumber = storeData.manager.phone;
+                    }
+                }
+
+                storeData.manager = {
+                    id: storeData.manager.id,
+                    name: storeData.manager.first_name,
+                    lastName: storeData.manager.last_name,
+                    email: storeData.manager.email,
+                    countryCode: countryCode,
+                    phone: phoneNumber,
+                    status: storeData.manager.status
+                };
+            }
+
+            // Agregar array de imágenes vacío para satisfacer interfaz Store
+            storeData.images = [];
+
+            // 🔸 PASO 11: Confirmar transacción y devolver respuesta exitosa (misma estructura que createStore)
+            await transaction.commit();
+
+            return res.status(200).json({
+                success: true,
+                status: 200,
+                message: "Tienda actualizada exitosamente",
+                store: storeData // ✅ Cambiado de 'data' a 'store' para consistencia
+            });
+        } catch (error) {
+            // 🚨 Rollback en caso de error
+            await transaction.rollback();
+            console.error("❌ Error al actualizar tienda:", error);
+
+            // 🔍 Manejo específico de errores de restricción única (igual que createStore)
+            if (error.name === 'SequelizeUniqueConstraintError') {
+                if (error.original && error.original.constraint) {
+                    switch (error.original.constraint) {
+                        case 'users_email_key':
+                            return res.status(400).json({
+                                success: false,
+                                status: 400,
+                                message: "El email del ADMIN ya está registrado en el sistema.",
+                            });
+                        case 'users_phone_key':
+                            return res.status(400).json({
+                                success: false,
+                                status: 400,
+                                message: "El teléfono del ADMIN ya está registrado en el sistema.",
+                            });
+                        case 'idx_stores_company_address_unique':
+                            return res.status(400).json({
+                                success: false,
+                                status: 400,
+                                message: "Ya existe una tienda registrada en esta dirección para su compañía.",
+                            });
+                        default:
+                            return res.status(400).json({
+                                success: false,
+                                status: 400,
+                                message: "Ya existe un registro con estos datos.",
+                            });
+                    }
+                }
+            }
+
+            // 🔍 Manejo específico de errores de validación
+            if (error.name === 'SequelizeValidationError') {
+                const validationMessages = error.errors.map(err => err.message).join(', ');
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: `Error de validación: ${validationMessages}`,
+                });
+            }
+
+            // Error genérico para otros casos
+            return res.status(500).json({
+                success: false,
+                status: 500,
+                message: "Error interno del servidor al actualizar la tienda.",
+            });
+        }
+    },
+
+    // 📌 Método para obtener todas las tiendas que le pertenecen a una ruta
+    async getStoresbyRoute(req, res) {
+        const { route_id } = req.params;
+
+        try {
+            // 🔍 Validar que route_id esté presente
+            if (!route_id) {
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: "Ups! No se reconoce la ruta.",
+                });
+            }
+
+            // 📊 Obtener todas las tiendas con TODAS las relaciones (igual que createStore/updateStore)
+            const allStores = await stores.findAll({
+                where: { route_id: route_id },
+                attributes: [
+                    'id',
+                    'name',
+                    'address',
+                    'phone',
+                    'neighborhood',
+                    'route_id',
+                    'company_id',
+                    // 🗺️ Extraer coordenadas del campo PostGIS ubicacion
+                    [stores.sequelize.fn('ST_Y', stores.sequelize.col('ubicacion')), 'latitude'],
+                    [stores.sequelize.fn('ST_X', stores.sequelize.col('ubicacion')), 'longitude'],
+                    'opening_time',
+                    'closing_time',
+                    'city',
+                    'state',
+                    'country',
+                ],
+                include: [
+                    {
+                        association: 'store_type',
+                        as: 'store_type',
+                        attributes: ['id', 'name']
+                    },
+                    {
+                        association: 'manager',
+                        as: 'manager',
+                        attributes: ['id', 'first_name', 'last_name', 'email', 'phone', 'status']
+                    },
                     {
                         association: 'images',
                         as: 'images',
-                        attributes: ['id', 'image_url', 'public_id', 'is_primary'],
+                        attributes: ['id', 'image_url', 'public_id', 'is_primary']
                     }
                 ]
             });
 
-            // 🎨 Formatear respuesta para el frontend
-            const formattedStores = orphanStores.map(store => {
+            // 🎨 Formatear respuesta para el frontend (igual que createStore/updateStore)
+            const formattedStores = allStores.map(store => {
                 const storeData = store.toJSON();
 
-                // Formatear manager si existe
+                // Formatear manager si existe para satisfacer interfaz User
                 if (storeData.manager) {
                     let countryCode = undefined;
                     let phoneNumber = undefined;
@@ -730,14 +733,159 @@ module.exports = {
                     };
                 }
 
+                // ✅ Asegurar que images sea un array (puede venir como null)
+                if (!storeData.images) {
+                    storeData.images = [];
+                }
+
                 return storeData;
             });
 
-            // Devolver la lista de tiendas huérfanas
-            return res.status(200).json(formattedStores);
+            // ✅ Devolver respuesta con estructura consistente
+            return res.status(200).json({
+                success: true,
+                status: 200,
+                message: `Se encontraron ${formattedStores.length} tiendas en la ruta`,
+                stores: formattedStores
+            });
+
+        } catch (error) {
+            console.error("❌ Error al obtener tiendas por ruta:", error);
+
+            // 🔍 Manejo específico de errores de validación
+            if (error.name === 'SequelizeValidationError') {
+                const validationMessages = error.errors.map(err => err.message).join(', ');
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: `Error de validación: ${validationMessages}`,
+                });
+            }
+
+            // Error genérico
+            return res.status(500).json({
+                success: false,
+                status: 500,
+                message: "Error interno del servidor al obtener las tiendas.",
+            });
+        }
+    },
+
+    // 📌 Método para obtener la lista de tiendas huérfanas
+    async getOrphanStores(req, res) {
+
+        const { company_id } = req.params;
+
+        if (!company_id) {
+            return res.status(400).json({
+                success: false,
+                status: 400,
+                message: "Ups! No se reconoce la compañía.",
+            });
+        }
+
+        try {
+            // 📊 Obtener todas las tiendas huérfanas con TODAS las relaciones (igual que createStore/updateStore)
+            const orphanStores = await stores.findAll({
+                where: { route_id: null, company_id: company_id },
+                attributes: [
+                    'id',
+                    'name',
+                    'address',
+                    'phone',
+                    'neighborhood',
+                    'route_id',
+                    'company_id', // ✅ Incluir company_id 
+                    // 🗺️ Extraer coordenadas del campo PostGIS ubicacion
+                    [stores.sequelize.fn('ST_Y', stores.sequelize.col('ubicacion')), 'latitude'],
+                    [stores.sequelize.fn('ST_X', stores.sequelize.col('ubicacion')), 'longitude'],
+                    'opening_time',
+                    'closing_time',
+                    'city', 'state',
+                    'country'
+                ],
+                include: [
+                    {
+                        association: 'store_type',
+                        as: 'store_type',
+                        attributes: ['id', 'name']
+                    },
+                    {
+                        association: 'manager',
+                        as: 'manager',
+                        attributes: ['id', 'first_name', 'last_name', 'email', 'phone', 'status']
+                    },
+                    {
+                        association: 'images',
+                        as: 'images',
+                        attributes: ['id', 'image_url', 'public_id', 'is_primary']
+                    }
+                ]
+            });
+
+            // 🎨 Formatear respuesta para el frontend (igual que createStore/updateStore)
+            const formattedStores = orphanStores.map(store => {
+                const storeData = store.toJSON();
+
+                // Formatear manager si existe para satisfacer interfaz User
+                if (storeData.manager) {
+                    let countryCode = undefined;
+                    let phoneNumber = undefined;
+
+                    if (storeData.manager.phone) {
+                        if (storeData.manager.phone.includes('-')) {
+                            [countryCode, phoneNumber] = storeData.manager.phone.split('-');
+                        } else {
+                            phoneNumber = storeData.manager.phone;
+                        }
+                    }
+
+                    storeData.manager = {
+                        id: storeData.manager.id,
+                        name: storeData.manager.first_name,
+                        lastName: storeData.manager.last_name,
+                        email: storeData.manager.email,
+                        countryCode: countryCode,
+                        phone: phoneNumber,
+                        status: storeData.manager.status
+                    };
+                }
+
+                // ✅ Asegurar que images sea un array (puede venir como null)
+                if (!storeData.images) {
+                    storeData.images = [];
+                }
+
+                return storeData;
+            });
+
+            // ✅ Devolver respuesta con estructura consistente
+            return res.status(200).json({
+                success: true,
+                status: 200,
+                message: `Se encontraron ${formattedStores.length} tiendas huérfanas`,
+                stores: formattedStores
+            });
+
         } catch (error) {
             console.error("❌ Error al obtener tiendas huérfanas:", error);
-            return res.status(500).json({ error: "Error al obtener tiendas huérfanas." });
+
+            // 🔍 Manejo específico de errores de validación
+            if (error.name === 'SequelizeValidationError') {
+                const validationMessages = error.errors.map(err => err.message).join(', ');
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: `Error de validación: ${validationMessages}`,
+                });
+            }
+
+            // Error genérico
+            return res.status(500).json({
+                success: false,
+                status: 500,
+                message: "Error interno del servidor al obtener las tiendas huérfanas.",
+            });
         }
     },
 
@@ -750,22 +898,34 @@ module.exports = {
             // Verificar si la tienda existe
             const store = await stores.findByPk(id);
             if (!store) {
-                return res.status(404).json({ error: "Tienda no encontrada." });
+                return res.status(404).json({
+                    success: false,
+                    status: 404,
+                    message: "La tienda que intenta eliminar YA NO EXISTE."
+                });
             }
 
             // Eliminar la tienda
             await stores.destroy({ where: { id } });
 
-            return res.status(200).json({ message: "Tienda eliminada exitosamente." });
+            return res.status(200).json({
+                success: true,
+                status: 200,
+                message: "La tienda ha sido eliminada exitosamente."
+            });
         } catch (error) {
             console.error("❌ Error al eliminar tienda:", error);
-            return res.status(500).json({ error: "Error al eliminar tienda." });
+            return res.status(500).json({
+                success: false,
+                status: 500,
+                message: "Error interno del servidor al eliminar la tienda."
+            });
         }
     },
 
     // 📌 Método para asignar una tienda a una ruta
     async assignStoreToRoute(req, res) {
-        console.log("📌 Intentando asignar una tienda a una ruta...");
+
         const { storeId } = req.params;
         const { route_id } = req.body;
 
@@ -773,7 +933,11 @@ module.exports = {
             // Verificar si la tienda existe
             const store = await stores.findByPk(storeId);
             if (!store) {
-                return res.status(404).json({ error: "La tienda no existe" });
+                return res.status(404).json({
+                    success: false,
+                    status: 404,
+                    message: "La tienda que intenta asignar YA NO EXISTE."
+                });
             }
 
             // Asignar la tienda a la ruta
@@ -789,7 +953,7 @@ module.exports = {
                     'phone',
                     'neighborhood',
                     'route_id',
-                    'image_url',
+                    'company_id', // ✅ Incluir company_id en la respuesta
                     // 🗺️ Extraer coordenadas del campo PostGIS ubicacion
                     [stores.sequelize.fn('ST_Y', stores.sequelize.col('ubicacion')), 'latitude'],
                     [stores.sequelize.fn('ST_X', stores.sequelize.col('ubicacion')), 'longitude'],
@@ -809,12 +973,21 @@ module.exports = {
                         association: 'manager',
                         as: 'manager',
                         attributes: ['id', 'first_name', 'last_name', 'email', 'phone', 'status']
+                    },
+                    {
+                        association: 'images',
+                        as: 'images',
+                        attributes: ['id', 'image_url', 'public_id', 'is_primary']
                     }
                 ]
             });
 
             // 🎨 Formatear respuesta para el frontend
             const storeData = createdStore.toJSON();
+            // ✅ Asegurar que images sea un array (puede venir como null)
+            if (!storeData.images) {
+                storeData.images = [];
+            }
 
             // Formatear manager si existe
             if (storeData.manager) {
@@ -840,11 +1013,20 @@ module.exports = {
                 };
             }
 
-            return res.status(200).json(storeData);
+            return res.status(200).json({
+                success: true,
+                status: 200,
+                message: "Asignacion exitosa.",
+                store: storeData
+            });
 
         } catch (error) {
             console.error("❌ Error al asignar tienda a ruta:", error);
-            return res.status(500).json({ error: "Error al asignar tienda a ruta." });
+            return res.status(500).json({
+                success: false,
+                status: 500,
+                message: "Ups! Algo paso asignando la tienda a la ruta."
+            });
         }
     }
 

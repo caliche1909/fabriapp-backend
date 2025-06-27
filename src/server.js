@@ -15,6 +15,7 @@ const storesRoutes = require('./routes/storesRoutes');
 const uploadImagesRoutes = require('./routes/uploadImagesRoutes');
 const registerCompanyAndUserRoutes = require('./routes/registerCompanyAndUserRoutes');
 const companyRoutes = require('./routes/companyRoutes');
+const userGeolocationRoutes = require('./routes/userGeolocationRoutes');
 const app = express();
 
 // Middleware
@@ -41,6 +42,7 @@ app.use('/api/stores', storesRoutes);
 app.use('/api/upload_images', uploadImagesRoutes);
 app.use('/api/register-company-and-user', registerCompanyAndUserRoutes);
 app.use('/api/company', companyRoutes);
+app.use('/api/users/geolocation', userGeolocationRoutes);
 
 // Puerto del servidor
 const PORT = process.env.PORT || 3000;

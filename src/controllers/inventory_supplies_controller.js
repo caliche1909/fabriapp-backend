@@ -1,4 +1,4 @@
-const { inventory_supplies, measurement_units, supplier_companies } = require('../models');
+const { inventory_supplies, measurement_units, supplier_companies, inventory_supplies_balance } = require('../models');
 const { Sequelize } = require('sequelize');
 
 module.exports = {
@@ -155,46 +155,84 @@ module.exports = {
                 minimum_stock
             });
 
-            // 🔹 Obtener el insumo completo con sus asociaciones
+            // 🔥 OBTENER EL INSUMO COMPLETO CON SU BALANCE (creado automáticamente por trigger)
             const supply = await inventory_supplies.findByPk(newSupply.id, {
                 include: [
-                    { model: measurement_units, as: 'packaging_unit' },
-                    { model: measurement_units, as: 'portion_unit' },
-                    { model: supplier_companies, as: 'supplier' }
+                    { 
+                        model: measurement_units, 
+                        as: 'packaging_unit',
+                        attributes: ['id', 'name', 'abbreviation', 'conversion_factor']
+                    },
+                    { 
+                        model: measurement_units, 
+                        as: 'portion_unit',
+                        attributes: ['id', 'name', 'abbreviation', 'conversion_factor']
+                    },
+                    { model: supplier_companies, as: 'supplier' },
+                    { 
+                        model: inventory_supplies_balance, 
+                        as: 'balance',
+                        attributes: ['id', 'balance', 'last_updated']
+                    }
                 ]
             });
 
-            // 🔹 Respuesta simplificada
+            // 🔥 RESPUESTA COMPLETA: Insumo + Balance inicial
             res.status(201).json({
                 success: true,
+                status: 201,
                 message: "Insumo registrado exitosamente",
                 supply: {
-                    id: supply.id,
-                    name: supply.name,
-                    packaging_type: supply.packaging_type,
-                    packaging_weight: supply.packaging_weight,
-                    packaging_unit: supply.packaging_unit,
-                    packaging_price: supply.packaging_price,
-                    portions: supply.portions,
-                    portion_unit: supply.portion_unit,
-                    portion_price: supply.portion_price,
-                    total_quantity_gr_ml_und: supply.total_quantity_gr_ml_und,
-                    unit_price: supply.unit_price,
-                    supplier: supply.supplier ? {
-                        id: supply.supplier.id,
-                        name: supply.supplier.name,
-                        address: supply.supplier.address,
-                        phone: supply.supplier.phone,
-                        email: supply.supplier.email,
-                        logo_url: supply.supplier.logo_url,
-                        verification: supply.supplier.verification,
-                        verification_count: supply.supplier.verification_count,
-                        has_social_media: supply.supplier.hasSocialMedia(),
-                        social_media: supply.supplier.getSocialMedia(),
-                    } : null,
-                    description: supply.description,
-                    minimum_stock: supply.minimum_stock,
-                    last_purchase_date: supply.last_purchase_date
+                    // ✅ NUEVO INSUMO (estructura InventorySupplies)
+                    newSupply: {
+                        id: supply.id,
+                        name: supply.name,
+                        packaging_type: supply.packaging_type,
+                        packaging_weight: parseFloat(supply.packaging_weight),
+                        packaging_unit: supply.packaging_unit ? {
+                            id: supply.packaging_unit.id,
+                            name: supply.packaging_unit.name,
+                            abbreviation: supply.packaging_unit.abbreviation,
+                            conversion_factor: parseFloat(supply.packaging_unit.conversion_factor)
+                        } : null,
+                        packaging_price: parseFloat(supply.packaging_price),
+                        portions: supply.portions,
+                        portion_unit: supply.portion_unit ? {
+                            id: supply.portion_unit.id,
+                            name: supply.portion_unit.name,
+                            abbreviation: supply.portion_unit.abbreviation,
+                            conversion_factor: parseFloat(supply.portion_unit.conversion_factor)
+                        } : null,
+                        portion_price: parseFloat(supply.portion_price),
+                        total_quantity_gr_ml_und: parseFloat(supply.total_quantity_gr_ml_und),
+                        unit_price: parseFloat(supply.unit_price),
+                        supplier: supply.supplier ? {
+                            id: supply.supplier.id,
+                            name: supply.supplier.name,
+                            address: supply.supplier.address,
+                            phone: supply.supplier.phone,
+                            email: supply.supplier.email,
+                            logo_url: supply.supplier.logo_url,
+                            verification: supply.supplier.verification,
+                            verification_count: supply.supplier.verification_count,
+                            has_social_media: supply.supplier.hasSocialMedia(),
+                            social_media: supply.supplier.getSocialMedia()
+                        } : null,
+                        description: supply.description,
+                        minimum_stock: parseFloat(supply.minimum_stock),
+                        last_purchase_date: supply.last_purchase_date
+                    },
+                    // ✅ BALANCE INICIAL (estructura InventorySuppliesBalance)
+                    balance: supply.balance ? {
+                        id: supply.balance.id,
+                        inventory_supply: {
+                            id: supply.id,
+                            name: supply.name,
+                            minimum_stock: parseFloat(supply.minimum_stock)
+                        },
+                        balance: parseFloat(supply.balance.balance),
+                        last_updated: supply.balance.last_updated
+                    } : null
                 }
             });
 
@@ -351,10 +389,10 @@ module.exports = {
             // 🔹 Buscar el insumo a eliminar en la base de datos
             const supplyDB = await inventory_supplies.findByPk(id);
             if (!supplyDB) {
-                return res.status(404).json({ 
+                return res.status(404).json({
                     success: false,
                     status: 404,
-                    message: "Este insumo ya NO EXISTE!" 
+                    message: "Este insumo ya NO EXISTE!"
                 });
             }
 
@@ -362,10 +400,10 @@ module.exports = {
             await inventory_supplies.destroy({ where: { id } });
 
             console.log("✅ Insumo eliminado con éxito:", supplyDB);
-            res.status(200).json({ 
+            res.status(200).json({
                 success: true,
                 status: 200,
-                message: "Insumo eliminado con éxito" 
+                message: "Insumo eliminado con éxito"
             });
 
         } catch (error) {
@@ -377,7 +415,7 @@ module.exports = {
 
 
     /**_______________________________________________SIN USAR__________________________________________________________ */
-   
+
     // 📌 Método para obtener un insumo por ID
     async getInventorySupplyById(req, res) {
         console.log("📌 Intentando obtener insumo por ID:", req.params.id);

@@ -1,4 +1,4 @@
-const { users, roles, companies, sequelize } = require('../models');
+const { users, roles, companies, user_companies, sequelize } = require('../models');
 const crypto = require('crypto');
 const { sendWelcomeEmail, notifyAdmin } = require('../utils/emailNotifier');
 
@@ -70,42 +70,48 @@ module.exports = {
             transaction = await sequelize.transaction();
 
             try {
-                // 5.1 Obtener el rol super_admin
-                const superAdminRole = await roles.findOne({
+                // 5.1 Obtener el rol OWNER para la empresa
+                const ownerRole = await roles.findOne({
                     where: {
-                        name: 'SUPER_ADMIN',
-                        is_global: true
+                        name: 'OWNER'
                     },
                     transaction
                 });
 
-                if (!superAdminRole) {
-                    throw new Error('El rol SUPER_ADMIN no existe en el sistema');
+                if (!ownerRole) {
+                    throw new Error('El rol OWNER no existe en el sistema');
                 }
 
-                // 5.2 Crear el usuario (el modelo se encargará de hashear la contraseña)
+                // 5.2 Crear el usuario (sin role_id global)
                 newUser = await users.create({
                     email,
                     password: plainPassword,
                     first_name: firstName,
                     last_name: lastName,
                     phone,
-                    role_id: superAdminRole.id,
-                    status: 'active'
+                    status: 'inactive'
                 }, { transaction });
 
-                // 5.3 Crear la compañía
+                // 5.3 Crear la compañía (SIN owner_id) por que ya no esta
                 newCompany = await companies.create({
                     name: companyName,
                     legal_name: companyName,
                     email,
                     phone,
-                    owner_id: newUser.id,
-                    is_active: true,
-                    is_default: true
+                    is_active: false,                   
                 }, { transaction });
 
-                // 5.4 Confirmar la transacción
+                // 5.4 Crear la relación owner en user_companies
+                await user_companies.create({
+                    user_id: newUser.id,
+                    company_id: newCompany.id,
+                    role_id: ownerRole.id,
+                    user_type: 'owner',  // ✅ NUEVO ENFOQUE UNIFICADO -> owner o collaborator
+                    is_default: true,    // ✅ Primera empresa es por defecto
+                    status: 'inactive'
+                }, { transaction });
+
+                // 5.5 Confirmar la transacción
                 await transaction.commit();
 
                 // 6. Enviar email de bienvenida (fuera de la transacción)
@@ -121,6 +127,13 @@ module.exports = {
                     // Si falla el envío del email, hacemos rollback manual
                     await users.destroy({ where: { id: newUser.id }, force: true });
                     await companies.destroy({ where: { id: newCompany.id }, force: true });
+                    await user_companies.destroy({ 
+                        where: { 
+                            user_id: newUser.id, 
+                            company_id: newCompany.id 
+                        }, 
+                        force: true 
+                    });
                     
                     throw new Error('Error al enviar el email de bienvenida');
                 }
@@ -159,7 +172,7 @@ module.exports = {
             let statusCode = 500;
             let message = 'Error en el proceso de registro';
 
-            if (error.message.includes('SUPER_ADMIN no existe')) {
+            if (error.message.includes('OWNER no existe')) {
                 statusCode = 500;
                 message = 'Error en la configuración del sistema';
             } else if (error.message.includes('email de bienvenida')) {

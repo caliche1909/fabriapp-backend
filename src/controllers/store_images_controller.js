@@ -8,8 +8,13 @@ module.exports = {
             // 1. Obtener tienda con sus imágenes en una sola consulta
             const store = await stores.findByPk(storeId);
 
-            if (!store) {
-                throw new Error('STORE_NOT_FOUND');
+            if(!store){
+                return {
+                    success: false,
+                    status: 404,
+                    message: 'Tienda no encontrada',
+                    store: null
+                }
             }
 
             // 3. Crear la nueva imagen
@@ -27,13 +32,15 @@ module.exports = {
                     'phone',
                     'neighborhood',
                     'route_id',
-                    'latitude',
-                    'longitude',
+                    'company_id', // ✅ Incluir company_id para consistencia
+                    // 🗺️ Extraer coordenadas del campo PostGIS ubicacion (igual que otros controladores)
+                    [stores.sequelize.fn('ST_Y', stores.sequelize.col('ubicacion')), 'latitude'],
+                    [stores.sequelize.fn('ST_X', stores.sequelize.col('ubicacion')), 'longitude'],
                     'opening_time',
                     'closing_time',
                     'city',
                     'state',
-                    'country',
+                    'country'
                 ],
                 include: [
                     {
@@ -44,19 +51,53 @@ module.exports = {
                     {
                         association: 'manager',
                         as: 'manager',
-                        attributes: ['name', 'email', 'phone', 'status']
-                    },
+                        attributes: ['id', 'first_name', 'last_name', 'email', 'phone', 'status'],                        
+                    },                    
                     {
                         association: 'images',
                         as: 'images',
-                        attributes: ['id', 'image_url', 'public_id', 'is_primary'],
+                        attributes: ['id', 'image_url', 'public_id', 'is_primary']
                     }
                 ]
             });
 
+            // 🎨 Formatear respuesta para el frontend (igual que otros controladores)
+            const storeData = updatedStore.toJSON();
+
+            // Formatear manager si existe para satisfacer interfaz User
+            if (storeData.manager) {
+                let countryCode = undefined;
+                let phoneNumber = undefined;
+
+                if (storeData.manager.phone) {
+                    if (storeData.manager.phone.includes('-')) {
+                        [countryCode, phoneNumber] = storeData.manager.phone.split('-');
+                    } else {
+                        phoneNumber = storeData.manager.phone;
+                    }
+                }
+
+                storeData.manager = {
+                    id: storeData.manager.id,
+                    name: storeData.manager.first_name,
+                    lastName: storeData.manager.last_name,
+                    email: storeData.manager.email,
+                    countryCode: countryCode,
+                    phone: phoneNumber,
+                    status: storeData.manager.status                 
+                };
+            }
+
+            // ✅ Asegurar que images sea un array (puede venir como null)
+            if (!storeData.images) {
+                storeData.images = [];
+            }
+
             return {
                 success: true,
-                store: updatedStore.get({ plain: true })
+                status: 200,
+                message: "Imagen subida exitosamente",
+                store: storeData
             };
 
         } catch (error) {

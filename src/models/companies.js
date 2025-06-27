@@ -101,28 +101,10 @@ module.exports = function (sequelize, DataTypes) {
                 }
             }
         },
-        owner_id: {
-            type: DataTypes.UUID,
-            allowNull: false,
-            references: {
-                model: 'users',
-                key: 'id'
-            },
-            validate: {
-                notNull: {
-                    msg: 'El propietario es requerido'
-                }
-            }
-        },
         is_active: {
             type: DataTypes.BOOLEAN,
             allowNull: false,
             defaultValue: true
-        },
-        is_default: {
-            type: DataTypes.BOOLEAN,
-            allowNull: false,
-            defaultValue: false
         },
         created_at: {
             type: DataTypes.DATE,
@@ -145,10 +127,6 @@ module.exports = function (sequelize, DataTypes) {
         updatedAt: 'updated_at',
         indexes: [
             {
-                name: "idx_companies_owner_id",
-                fields: [{ name: "owner_id" }]
-            },
-            {
                 name: "idx_companies_is_active",
                 fields: [{ name: "is_active" }]
             },
@@ -159,10 +137,6 @@ module.exports = function (sequelize, DataTypes) {
             {
                 name: "idx_companies_country",
                 fields: [{ name: "country" }]
-            },
-            {
-                name: "idx_companies_is_default",
-                fields: [{ name: "is_default" }]
             }
         ]
     });
@@ -173,32 +147,66 @@ module.exports = function (sequelize, DataTypes) {
         return parts.filter(Boolean).join(', ');
     };
 
-    Company.prototype.isOwner = function (userId) {
-        return this.owner_id === userId;
+    // Método actualizado para verificar si un usuario es owner usando user_companies
+    Company.prototype.isOwner = async function (userId) {
+        const ownerRecord = await sequelize.models.user_companies.findOne({
+            where: {
+                company_id: this.id,
+                user_id: userId,
+                user_type: 'owner',
+                status: 'active'
+            }
+        });
+        return !!ownerRecord;
     };
 
-    // Método para establecer esta compañía como predeterminada
-    Company.prototype.setAsDefault = async function () {
+    // Método para obtener el propietario de la empresa
+    Company.prototype.getOwner = async function () {
+        const ownerRecord = await sequelize.models.user_companies.findOne({
+            where: {
+                company_id: this.id,
+                user_type: 'owner',
+                status: 'active'
+            },
+            include: [{
+                model: sequelize.models.users,
+                as: 'user'
+            }]
+        });
+        return ownerRecord ? ownerRecord.user : null;
+    };
+
+    // Método estático para crear empresa con owner
+    Company.createWithOwner = async function (companyData, userId, roleId, setAsDefault = false) {
         const transaction = await sequelize.transaction();
         try {
-            // Primero, establecer todas las compañías del mismo propietario como no predeterminadas
-            await Company.update(
-                { is_default: false },
-                { 
-                    where: { 
-                        owner_id: this.owner_id,
-                        id: { [Sequelize.Op.ne]: this.id }
-                    },
-                    transaction
-                }
-            );
+            // Crear la empresa
+            const company = await Company.create(companyData, { transaction });
 
-            // Luego, establecer esta compañía como predeterminada
-            this.is_default = true;
-            await this.save({ transaction });
+            // Si es la primera empresa del usuario o se especifica, establecer como default
+            if (setAsDefault) {
+                // Establecer todas las otras empresas del usuario como no predeterminadas
+                await sequelize.models.user_companies.update(
+                    { is_default: false },
+                    { 
+                        where: { user_id: userId },
+                        transaction
+                    }
+                );
+            }
+
+            // Crear la relación owner en user_companies
+            await sequelize.models.user_companies.create({
+                user_id: userId,
+                company_id: company.id,
+                role_id: roleId,
+                user_type: 'owner',
+                is_default: setAsDefault,
+                status: 'active'
+            }, { transaction });
 
             await transaction.commit();
-            return true;
+            return company;
         } catch (error) {
             await transaction.rollback();
             throw error;
@@ -207,12 +215,6 @@ module.exports = function (sequelize, DataTypes) {
 
     // Relaciones
     Company.associate = function (models) {
-        // Una compañía pertenece a un usuario (owner)
-        Company.belongsTo(models.users, {
-            as: 'owner',
-            foreignKey: 'owner_id'
-        });
-
         // Una compañía puede tener muchos insumos
         Company.hasMany(models.inventory_supplies, {
             foreignKey: 'company_id',

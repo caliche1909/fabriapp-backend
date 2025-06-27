@@ -10,71 +10,179 @@ module.exports = {
     // Metodo para eliminar una imagen de tienda
     async deleteStoreImage(req, res) {
         const { storeId, imageId, publicId, image_url, isPrimary, user } = req.body
+        
+        console.log('🔥 INICIO deleteStoreImage - Datos recibidos:', {
+            storeId,
+            imageId,
+            publicId,
+            image_url,
+            isPrimary,
+            user: user?.email || 'No user'
+        });
 
         if (!storeId || !imageId || !publicId || !image_url || !user) {
+            console.log('❌ Datos incompletos:', { storeId, imageId, publicId, image_url, user });
             return res.status(400).json({
                 success: false,
-                status: '400',
+                status: 400,
                 message: 'Datos incompletos para eliminar la imagen',
                 store: null
             });
         }
 
         const transaction = await sequelize.transaction();
+        console.log('🔄 Transacción iniciada:', transaction.id);
         let cloudinaryDeleted = false;
+        let cloudinaryExists = false;
 
         try {
-            // 1. Verificar que la imagen existe en la BD
+            console.log('🔸 PASO 1: Verificando existencia en BD y Cloudinary...');
+            
+            // 🔸 PASO 1: Verificar existencia en AMBOS lugares primero          
+
+            // 1.1 Verificar en Base de Datos (debe pertenecer a la tienda correcta)
             const imageRecord = await store_images.findOne({
-                where: { id: imageId, store_id: storeId },
+                where: {
+                    id: imageId,
+                    store_id: storeId
+                },
                 transaction
             });
+            const existsInDatabase = !!imageRecord;
+            console.log('🗄️ Existe en BD:', existsInDatabase, imageRecord ? `ID: ${imageRecord.id}` : 'No encontrada');
 
-            if (!imageRecord) {
+            // 1.2 Verificar en Cloudinary
+            console.log('☁️ Verificando en Cloudinary...');
+            try {
+                const cloudinaryInfo = await cloudinary.api.resource(publicId);
+                if (cloudinaryInfo && cloudinaryInfo.public_id) {
+                    cloudinaryExists = true;
+                    console.log('☁️ Existe en Cloudinary:', cloudinaryInfo.public_id);
+                }
+            } catch (cloudinaryError) {
+                console.log('☁️ Error verificando Cloudinary:', cloudinaryError.error?.http_code || cloudinaryError.message);
+                if (cloudinaryError.error && cloudinaryError.error.http_code === 404) {
+                    cloudinaryExists = false;
+                    console.log('☁️ No existe en Cloudinary (404)');
+                } else {
+                    // Si hay error de conectividad, asumimos que existe para intentar eliminarla
+                    cloudinaryExists = true;
+                    console.log('☁️ Error de conectividad, asumiendo que existe');
+                }
+            }
+
+            // 🔸 PASO 2: Validar que existe en al menos uno de los dos lugares
+            console.log('🔸 PASO 2: Validando existencia - BD:', existsInDatabase, 'Cloudinary:', cloudinaryExists);
+            if (!existsInDatabase && !cloudinaryExists) {
+                console.log('❌ No existe en ningún lugar, haciendo rollback');
                 await transaction.rollback();
                 return res.status(404).json({
                     success: false,
-                    status: '404',
-                    message: 'La imagen no existe en la base de datos',
+                    status: 404,
+                    message: 'La imagen que intenta eliminar NO EXISTE',
                     store: null
                 });
             }
 
-            // 2. Eliminar de Cloudinary primero
-            const cloudinaryResult = await cloudinary.uploader.destroy(publicId);
+            // 🔸 PASO 3: Eliminar según los casos
+            console.log('🔸 PASO 3: Iniciando eliminación...');
+            let databaseDeleted = false;
 
-            if (cloudinaryResult.result !== 'ok') {
-                await transaction.rollback();
-                return res.status(500).json({
-                    success: false,
-                    status: '500',
-                    message: 'No se pudo eliminar la imagen de Cloudinary',
-                    store: null
-                });
-            }
+            // CASO 1: Existe en BD y Cloudinary → Eliminar de ambos
+            if (existsInDatabase && cloudinaryExists) {
+                console.log('📋 CASO 1: Eliminando de BD y Cloudinary...');
 
-            cloudinaryDeleted = true;
-
-            // 3. Eliminar de la base de datos
-            await store_images.destroy({
-                where: { id: imageId },
-                transaction
-            });
-
-            // 4. Si era la imagen principal, asignar una nueva
-            if (isPrimary) {
-                const newPrimary = await store_images.findOne({
-                    where: { store_id: storeId },
-                    order: [['created_at', 'DESC']],
+                // Eliminar de BD
+                console.log('🗄️ Eliminando de BD...');
+                await store_images.destroy({
+                    where: { id: imageId },
                     transaction
                 });
+                databaseDeleted = true;
+                console.log('✅ Eliminada de BD exitosamente');
 
-                if (newPrimary) {
-                    await newPrimary.update({ is_primary: true }, { transaction });
+                // Eliminar de Cloudinary
+                console.log('☁️ Eliminando de Cloudinary...');
+                try {
+                    await cloudinary.uploader.destroy(publicId);
+                    cloudinaryDeleted = true;
+                    console.log(`✅ Eliminada de Cloudinary exitosamente`);
+                } catch (error) {
+                    console.log('❌ Error eliminando de Cloudinary:', error.message);
+                    await transaction.rollback();
+                    console.log('🔄 Rollback por error de Cloudinary');
+                    return res.status(500).json({
+                        success: false,
+                        status: 500,
+                        message: 'Error al eliminar imagen, por favor intente mas tarde',
+                        store: null
+                    });
                 }
-            }           
 
-            // Recuperar tienda actualizada
+                // Manejar imagen principal si es necesario
+                if (isPrimary) {
+                    console.log('🖼️ Era imagen principal, buscando nueva imagen principal...');
+                    const newPrimary = await store_images.findOne({
+                        where: { store_id: storeId },
+                        order: [['created_at', 'DESC']],
+                        transaction
+                    });
+                    if (newPrimary) {
+                        await newPrimary.update({ is_primary: true }, { transaction });
+                        console.log('✅ Nueva imagen principal asignada:', newPrimary.id);
+                    } else {
+                        console.log('ℹ️ No hay más imágenes para asignar como principal');
+                    }
+                }
+            }
+            // CASO 2: Existe solo en BD → Eliminar solo de BD
+            else if (existsInDatabase && !cloudinaryExists) {
+                console.log('📋 CASO 2: Eliminando solo de BD...');
+
+                await store_images.destroy({
+                    where: { id: imageId },
+                    transaction
+                });
+                databaseDeleted = true;
+                console.log('✅ Eliminada de BD exitosamente (no existía en Cloudinary)');
+
+                // Manejar imagen principal si es necesario
+                if (isPrimary) {
+                    console.log('🖼️ Era imagen principal, buscando nueva imagen principal...');
+                    const newPrimary = await store_images.findOne({
+                        where: { store_id: storeId },
+                        order: [['created_at', 'DESC']],
+                        transaction
+                    });
+                    if (newPrimary) {
+                        await newPrimary.update({ is_primary: true }, { transaction });
+                        console.log('✅ Nueva imagen principal asignada:', newPrimary.id);
+                    } else {
+                        console.log('ℹ️ No hay más imágenes para asignar como principal');
+                    }
+                }
+            }
+            // CASO 3: Existe solo en Cloudinary → Eliminar solo de Cloudinary
+            else if (!existsInDatabase && cloudinaryExists) {
+                console.log(`📋 CASO 3: Eliminando solo de Cloudinary (no existe en BD)`);
+
+                try {
+                    await cloudinary.uploader.destroy(publicId);
+                    cloudinaryDeleted = true;
+                    console.log('✅ Eliminada de Cloudinary exitosamente (no existía en BD)');
+                } catch (error) {
+                    console.log('❌ Error eliminando de Cloudinary (CASO 3):', error.message);
+                    return res.status(500).json({
+                        success: false,
+                        status: 500,
+                        message: 'Error al eliminar imagen, intente de nuevo',
+                        store: null
+                    });
+                }
+            }
+
+            console.log('🔸 PASO 4: Recuperando tienda actualizada...');
+            // Recuperar tienda actualizada con estructura consistente
             const updatedStore = await stores.findByPk(storeId, {
                 attributes: [
                     'id',
@@ -83,13 +191,15 @@ module.exports = {
                     'phone',
                     'neighborhood',
                     'route_id',
-                    'latitude',
-                    'longitude',
+                    'company_id', // ✅ Incluir company_id para consistencia
+                    // 🗺️ Extraer coordenadas del campo PostGIS ubicacion
+                    [stores.sequelize.fn('ST_Y', stores.sequelize.col('ubicacion')), 'latitude'],
+                    [stores.sequelize.fn('ST_X', stores.sequelize.col('ubicacion')), 'longitude'],
                     'opening_time',
                     'closing_time',
                     'city',
                     'state',
-                    'country',
+                    'country'
                 ],
                 include: [
                     {
@@ -100,67 +210,106 @@ module.exports = {
                     {
                         association: 'manager',
                         as: 'manager',
-                        attributes: ['name', 'email', 'phone', 'status']
+                        attributes: ['id', 'first_name', 'last_name', 'email', 'phone', 'status']
                     },
                     {
                         association: 'images',
                         as: 'images',
-                        attributes: ['id', 'image_url', 'public_id', 'is_primary'],
+                        attributes: ['id', 'image_url', 'public_id', 'is_primary']
                     }
                 ],
                 transaction
             });
+            
+            console.log('📊 Tienda recuperada:', updatedStore ? `ID: ${updatedStore.id}` : 'No encontrada');
+            console.log('🖼️ Imágenes restantes:', updatedStore?.images?.length || 0);
 
-            // 5. Confirmar la transacción
+            // 🎨 Formatear respuesta para el frontend (igual que otros controladores)
+            const storeData = updatedStore.toJSON();
+
+            // Formatear manager si existe para satisfacer interfaz User
+            if (storeData.manager) {
+                let countryCode = undefined;
+                let phoneNumber = undefined;
+
+                if (storeData.manager.phone) {
+                    if (storeData.manager.phone.includes('-')) {
+                        [countryCode, phoneNumber] = storeData.manager.phone.split('-');
+                    } else {
+                        phoneNumber = storeData.manager.phone;
+                    }
+                }
+
+                storeData.manager = {
+                    id: storeData.manager.id,
+                    name: storeData.manager.first_name,
+                    lastName: storeData.manager.last_name,
+                    email: storeData.manager.email,
+                    countryCode: countryCode,
+                    phone: phoneNumber,
+                    status: storeData.manager.status
+                };
+            }
+
+            // ✅ Asegurar que images sea un array (puede venir como null)
+            if (!storeData.images) {
+                storeData.images = [];
+            }
+
+            // 🔸 PASO 5: Confirmar la transacción y devolver respuesta
+            console.log('🔸 PASO 5: Confirmando transacción...');
             await transaction.commit();
+            console.log('✅ Transacción confirmada exitosamente');
 
+            console.log('🎉 ÉXITO: Imagen eliminada correctamente');
             return res.status(200).json({
                 success: true,
-                status: '200',
-                message: 'Imagen eliminada exitosamente',
-                store: updatedStore
+                status: 200,
+                message: "Imagen eliminada exitosamente",
+                store: storeData
             });
 
         } catch (error) {
+            console.log('❌ ERROR CAPTURADO en catch principal:', error.message);
+            console.log('📋 Stack trace:', error.stack);
+            console.log('🔍 Detalles del error:', {
+                name: error.name,
+                message: error.message,
+                code: error.code,
+                sql: error.sql
+            });
 
-            console.log("ERROR AL ELIMINAR IMAGEN:", error);
-            // Rollback en caso de error
-            await transaction.rollback();
-
-            // Intentar recuperar la imagen en Cloudinary si fue eliminada pero falló la BD
-            if (cloudinaryDeleted) {
-                try {
-                    await cloudinary.uploader.upload(image_url, {
-                        public_id: publicId,
-                        overwrite: true,
-                        invalidate: true
-                    });
-                    console.warn('Imagen recreada en Cloudinary después de fallo en BD');
-                } catch (restoreError) {
-                    console.error('Error crítico al restaurar imagen en Cloudinary:', restoreError);
-
-                    // Aquí deberías notificar al equipo para acción manual
-                    await notifyAdmin({
-                        type: 'ORPHANED_IMAGE',
-                        publicId: publicId,
-                        imageUrl: image_url,
-                        userId: user.id
-                    });
-
-                    console.error('Error al eliminar imagen:', {
-                        error: error instanceof Error ? error.message : error,
-                        timestamp: new Date().toISOString()
-                    });
-
-                    return res.status(500).json({
-                        success: false,
-                        status: '500',
-                        message: 'Error al eliminar la imagen',
-                        store: null
-                    });
-                }
+            // 🔸 Solo hacer rollback si la transacción NO ha sido confirmada
+            if (!transaction.finished) {
+                console.log('🔄 Haciendo rollback de la transacción...');
+                await transaction.rollback();
+                console.log('✅ Rollback completado');
+            } else {
+                console.log('ℹ️ Transacción ya terminada, no se hace rollback');
             }
 
+            // 🔍 Manejo específico de errores de conectividad
+            if (error.message && error.message.includes('ENOTFOUND')) {
+                console.log('🌐 Error de conectividad detectado');
+                return res.status(503).json({
+                    success: false,
+                    status: 503,
+                    message: 'Problemas de conectividad. La imagen puede haber sido eliminada parcialmente.',
+                    error_type: 'CONNECTIVITY_ERROR',
+                    store: null
+                });
+            }
+
+            // Error genérico
+            console.log('🚨 Devolviendo error genérico al cliente');
+            return res.status(500).json({
+                success: false,
+                status: 500,
+                message: 'Error interno del servidor al eliminar la imagen',
+                error_type: 'GENERAL_ERROR',
+                details: process.env.NODE_ENV === 'development' ? error.message : null,
+                store: null
+            });
         }
 
     },
@@ -168,7 +317,7 @@ module.exports = {
     // Método para subir una imagen de tienda a cloudinary y guardar en la base de datos
     async uploadStoreImage(req, res) {
         const { file, body } = req;
-        const { aspect, imageType, storeId, storeName, storeType, user } = body;
+        const { aspect, imageType, storeId, storeName, storeType, user, companyName } = body;
         let cloudinaryResult = null;
 
         // Parsear usuario si viene como string JSON
@@ -208,10 +357,22 @@ module.exports = {
                 storeName,
                 storeType,
                 imageType,
-                userObj
+                userObj,
+                companyName
             );
 
-            // 4. Guardar en base de datos
+            // 4. Verificar que la subida a Cloudinary fue exitosa
+            if (!cloudinaryResult || !cloudinaryResult.secure_url || !cloudinaryResult.public_id) {
+                console.error('❌ Subida a Cloudinary falló - Respuesta incompleta:', cloudinaryResult);
+                return res.status(500).json({
+                    success: false,
+                    status: 500,
+                    message: 'Ups! Ocurrio un error al subir la imagen, por favor intente de nuevo',
+                    
+                });
+            }          
+
+            // 5. Guardar en base de datos (solo si Cloudinary fue exitoso)
             const imageData = {
                 image_url: cloudinaryResult.secure_url,
                 public_id: cloudinaryResult.public_id,
@@ -222,14 +383,12 @@ module.exports = {
                 uploaded_by: userObj.id
             };
 
-            const newStore = await storeImageController.createStoreImage(storeId, imageData);
+            const response = await storeImageController.createStoreImage(storeId, imageData);
 
+            // 6. Respuesta exitosa
+            return res.json(response);
 
-            // 5. Respuesta exitosa
-            return res.json(newStore);
-
-        } catch (error) {
-            console.error('❌ Error al procesar la imagen:', error);
+        } catch (error) {           
 
             // Limpieza en caso de error después de subir a Cloudinary
             if (cloudinaryResult?.public_id) {
@@ -274,9 +433,9 @@ function getHeightFromAspect(aspect) {
     }
 }
 
-async function uploadToCloudinary(buffer, storeName, storeType, imageType, user) {
+async function uploadToCloudinary(buffer, storeName, storeType, imageType, user, companyName) {
     const uploadOptions = {
-        folder: `siloe/stores`,
+        folder: `FabriApp/stores/${companyName}`,
         public_id: `${storeName || 'store'}_${Date.now()}`,
         format: 'webp',
         resource_type: 'image',

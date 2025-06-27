@@ -1,4 +1,4 @@
-const { routes, users, stores, store_types, roles } = require('../models');
+const { routes, users } = require('../models');
 
 module.exports = {
     // 📌 Método para obtener todas las rutas de una compañía
@@ -28,15 +28,8 @@ module.exports = {
                     {
                         model: users,
                         as: 'seller',
-                        attributes: ['id', 'first_name', 'last_name', 'email', 'phone', 'status'],
-                        include: [
-                            {
-                                model: roles,
-                                as: 'role',
-                                attributes: ['id', 'name'],
-                            },
-                        ],
-                    },
+                        attributes: ['id', 'first_name', 'last_name', 'email', 'phone', 'status']
+                    }
                 ],
                 order: [['created_at', 'DESC']] // Ordenar por fecha de creación
             });
@@ -51,13 +44,9 @@ module.exports = {
                     email: route.seller.email,
                     name: route.seller.first_name,
                     lastName: route.seller.last_name,
-                    contryCode: route.seller.phone.split('-')[0],
-                    phone: route.seller.phone.split('-')[1],
-                    status: route.seller.status,
-                    role: route.seller.role ? {
-                        id: route.seller.role.id,
-                        name: route.seller.role.name
-                    } : null
+                    contryCode: route.seller.phone?.split('-')[0] || '',
+                    phone: route.seller.phone?.split('-')[1] || route.seller.phone || '',
+                    status: route.seller.status
                 } : null,
                 stores: []
             }));
@@ -81,14 +70,14 @@ module.exports = {
 
     // 📌 Método para crear una ruta
     async createRoute(req, res) {
-
+        console.log("📌 Intentando crear una nueva ruta...", req.body);
 
         try {
             const { name, user_id, working_days } = req.body;
             const { company_id } = req.params;
 
-            // 🔹 Validaciones
-            if (!name) {
+            // 🔹 Validar datos obligatorios
+            if (!name || !company_id) {
                 return res.status(400).json({
                     success: false,
                     status: 400,
@@ -136,14 +125,7 @@ module.exports = {
                         {
                             model: users,
                             as: 'seller',
-                            attributes: ['id', 'first_name', 'last_name', 'email', 'phone', 'status'],
-                            include: [
-                                {
-                                    model: roles,
-                                    as: 'role',
-                                    attributes: ['id', 'name']
-                                }
-                            ]
+                            attributes: ['id', 'first_name', 'last_name', 'email', 'phone', 'status']
                         }
                     ]
                 });
@@ -169,10 +151,6 @@ module.exports = {
                         countryCode: countryCode,
                         phone: phoneNumber,
                         status: routeWithSeller.seller.status,
-                        role: {
-                            id: routeWithSeller.seller.role.id,
-                            name: routeWithSeller.seller.role.name
-                        }
                     };
                 }
             }
@@ -201,10 +179,9 @@ module.exports = {
             });
         }
     },
-
     // 📌 Método para actualizar una ruta
     async updateRoute(req, res) {
-        console.log("📌 Intentando actualizar una ruta...");
+        console.log("📌 Intentando actualizar una ruta...", req.body);
 
         try {
             const { id } = req.params;
@@ -243,14 +220,7 @@ module.exports = {
                         {
                             model: users,
                             as: 'seller',
-                            attributes: ['id', 'first_name', 'last_name', 'email', 'phone', 'status'],
-                            include: [
-                                {
-                                    model: roles,
-                                    as: 'role',
-                                    attributes: ['id', 'name']
-                                }
-                            ]
+                            attributes: ['id', 'first_name', 'last_name', 'email', 'phone', 'status']
                         }
                     ]
                 });
@@ -316,8 +286,8 @@ module.exports = {
         try {
             const { id } = req.params;
 
+            // 🔹 Buscar la ruta
             const route = await routes.findByPk(id);
-
             if (!route) {
                 return res.status(404).json({
                     success: false,
@@ -343,79 +313,6 @@ module.exports = {
         }
     },
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    //📌 Endpoint para obtener las tiendas de una ruta
-    async getStoresByRoute(req, res) {
-        try {
-            const { id } = req.params; // se espera que la URL sea /routes/:id/stores
-            const route = await routes.findByPk(id, {
-                include: [
-                    {
-                        model: users,
-                        as: 'seller',
-                        attributes: ['id', 'name', 'email', 'phone', 'status'],
-                        include: [
-                            {
-                                model: roles,
-                                as: 'role',
-                                attributes: ['id', 'name'],
-                            },
-                        ],
-                    },
-                    {
-                        model: stores,
-                        as: 'stores',
-                        attributes: ['id', 'name', 'address', 'phone', 'image_url', 'latitude', 'longitude', 'opening_time', 'closing_time', 'neighborhood'],
-                        include: [
-                            {
-                                model: store_types,
-                                as: 'store_type',
-                                attributes: ['id', 'name', 'description'],
-                            },
-                            {
-                                model: users,
-                                as: 'manager',
-                                attributes: ['id', 'name', 'email', 'phone', 'status']
-                            }
-                        ],
-                    },
-                ],
-            });
-            if (!route) {
-                return res.status(404).json({ error: "Ruta no encontrada." });
-            }
-            res.status(200).json(route.stores);
-        } catch (error) {
-            console.error("❌ Error al obtener tiendas de la ruta:", error);
-            res.status(500).json({ error: "Error al obtener tiendas de la ruta." });
-        }
-    },
-
-
-
-    
-
-    
+  
 };
 
