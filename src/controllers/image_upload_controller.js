@@ -2,7 +2,7 @@ const cloudinary = require('../config/cloudenary.config');
 const { optimizeImage } = require('../utils/imageOptimizer');
 const storeImageController = require('./store_images_controller');
 const stream = require('stream');
-const { store_images, stores, sequelize } = require('../models');
+const { store_images, stores, sequelize, users } = require('../models');
 const { notifyAdmin } = require('../utils/emailNotifier');
 
 module.exports = {
@@ -10,7 +10,7 @@ module.exports = {
     // Metodo para eliminar una imagen de tienda
     async deleteStoreImage(req, res) {
         const { storeId, imageId, publicId, image_url, isPrimary, user } = req.body
-        
+
         console.log('🔥 INICIO deleteStoreImage - Datos recibidos:', {
             storeId,
             imageId,
@@ -37,7 +37,7 @@ module.exports = {
 
         try {
             console.log('🔸 PASO 1: Verificando existencia en BD y Cloudinary...');
-            
+
             // 🔸 PASO 1: Verificar existencia en AMBOS lugares primero          
 
             // 1.1 Verificar en Base de Datos (debe pertenecer a la tienda correcta)
@@ -220,7 +220,7 @@ module.exports = {
                 ],
                 transaction
             });
-            
+
             console.log('📊 Tienda recuperada:', updatedStore ? `ID: ${updatedStore.id}` : 'No encontrada');
             console.log('🖼️ Imágenes restantes:', updatedStore?.images?.length || 0);
 
@@ -317,62 +317,74 @@ module.exports = {
     // Método para subir una imagen de tienda a cloudinary y guardar en la base de datos
     async uploadStoreImage(req, res) {
         const { file, body } = req;
-        const { aspect, imageType, storeId, storeName, storeType, user, companyName } = body;
+        const { aspect, imageType, storeId, storeName, storeType, companyName, ownerId, ownerEmail } = body;
         let cloudinaryResult = null;
 
-        // Parsear usuario si viene como string JSON
-        let userObj = user;
-        if (typeof user === 'string') {
-            try {
-                userObj = JSON.parse(user);
-            } catch (e) {
-                userObj = {};
-            }
-        }
+        console.log("📸 INICIO uploadStoreImage - Datos recibidos:", {
+            storeId, storeName, storeType, companyName, 
+            hasOwnerId: !!ownerId,
+            hasOwnerEmail: !!ownerEmail,
+            aspect, imageType
+        });
 
         try {
             // 1. Validaciones iniciales
             if (!file || !file.buffer) {
-                return res.status(400).json({ error: 'Archivo no válido o faltante' });
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: 'Archivo no válido o faltante'
+                });
             }
 
-            const requiredFields = ['aspect', 'storeId', 'storeName', 'storeType', 'user'];
+            const requiredFields = ['aspect', 'storeId', 'storeName', 'storeType', 'companyName', 'ownerId', 'ownerEmail'];
             const missingFields = requiredFields.filter(field => !body[field]);
             if (missingFields.length > 0) {
                 return res.status(400).json({
-                    error: 'Datos incompletos',
+                    success: false,
+                    status: 400,
+                    message: 'Datos incompletos',
                     missingFields
                 });
             }
 
-            // 2. Optimizar imagen
-            const maxWidth = imageType === 'banner' ? 1200 : getWidthFromAspect(aspect);
-            const maxHeight = imageType === 'banner' ? null : getHeightFromAspect(aspect);
+            // 2. Verificar que la tienda existe
+            const store = await stores.findByPk(storeId);
+            if (!store) {
+                return res.status(404).json({
+                    success: false,
+                    status: 404,
+                    message: 'Tienda no encontrada'
+                });
+            }
 
+            // 3. Optimizar imagen (tamaño pequeño para tarjetas de tienda)
+            const maxWidth = getWidthFromAspect(aspect);
+            const maxHeight = getHeightFromAspect(aspect);
+            const { optimizeImage } = require('../utils/imageOptimizer');
             const optimizedBuffer = await optimizeImage(file.buffer, maxWidth, maxHeight);
 
-            // 3. Subir a Cloudinary
-            cloudinaryResult = await uploadToCloudinary(
-                optimizedBuffer,
-                storeName,
-                storeType,
-                imageType,
-                userObj,
-                companyName
-            );
+            // 4. Subir a Cloudinary con estructura: FabriApp/ownerEmail/companyName/stores
+            cloudinaryResult = await uploadToCloudinaryUnified(optimizedBuffer, {
+                ownerEmail: ownerEmail,
+                companyName: companyName,
+                itemName: storeName,
+                imageType: imageType || 'store_image',
+                entityType: 'stores',
+                tags: [storeName, storeType]
+            });
 
-            // 4. Verificar que la subida a Cloudinary fue exitosa
+            // 5. Verificar que la subida a Cloudinary fue exitosa
             if (!cloudinaryResult || !cloudinaryResult.secure_url || !cloudinaryResult.public_id) {
                 console.error('❌ Subida a Cloudinary falló - Respuesta incompleta:', cloudinaryResult);
                 return res.status(500).json({
                     success: false,
                     status: 500,
-                    message: 'Ups! Ocurrio un error al subir la imagen, por favor intente de nuevo',
-                    
+                    message: 'Error al subir la imagen, por favor intente de nuevo'
                 });
-            }          
+            }
 
-            // 5. Guardar en base de datos (solo si Cloudinary fue exitoso)
+            // 6. Guardar en base de datos usando el controlador de store_images
             const imageData = {
                 image_url: cloudinaryResult.secure_url,
                 public_id: cloudinaryResult.public_id,
@@ -380,15 +392,22 @@ module.exports = {
                 width: cloudinaryResult.width,
                 height: cloudinaryResult.height,
                 bytes: cloudinaryResult.bytes,
-                uploaded_by: userObj.id
+                uploaded_by: req.user?.id || ownerId
             };
 
             const response = await storeImageController.createStoreImage(storeId, imageData);
 
-            // 6. Respuesta exitosa
+            console.log('✅ Imagen de tienda subida exitosamente:', {
+                storeId: store.id,
+                newImageUrl: cloudinaryResult.secure_url,
+                publicId: cloudinaryResult.public_id
+            });
+
+            // 7. Respuesta exitosa
             return res.json(response);
 
-        } catch (error) {           
+        } catch (error) {
+            console.error('❌ Error en uploadStoreImage:', error);
 
             // Limpieza en caso de error después de subir a Cloudinary
             if (cloudinaryResult?.public_id) {
@@ -397,16 +416,140 @@ module.exports = {
             }
 
             return res.status(500).json({
-                error: 'Error al procesar la imagen',
-                details: process.env.NODE_ENV === 'development' ? error.message : null,
-                requestMetadata: {
-                    storeId: body?.storeId || null,
-                    user: userObj?.email || null
-                }
+                success: false,
+                status: 500,
+                message: 'Error interno del servidor al subir imagen',
+                details: process.env.NODE_ENV === 'development' ? error.message : null
             });
         }
     },
 
+    // Método para subir una imagen de perfil de usuario a cloudinary y guardar en la base de datos
+    async uploadProfileImage(req, res) {
+        const { file, body } = req;
+        const { ownerId, userName, userEmail, companyName, aspect, imageType, ownerEmail, currentImagePublicId } = body;
+        let cloudinaryResult = null;
+
+        console.log("📸 INICIO uploadProfileImage - Datos recibidos:", {
+            ownerId, userName, userEmail, companyName,
+            hasOwnerEmail: !!ownerEmail,
+            aspect, imageType,
+            hasCurrentImagePublicId: !!currentImagePublicId
+        });
+
+        try {
+            // 1. Validaciones iniciales
+            if (!file || !file.buffer) {
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: 'Archivo no válido o faltante'
+                });
+            }
+
+            const requiredFields = ['ownerId', 'userName', 'userEmail', 'companyName', 'aspect'];
+            const missingFields = requiredFields.filter(field => !body[field]);
+            if (missingFields.length > 0) {
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: 'Datos incompletos',
+                    missingFields
+                });
+            }
+
+            // 2. Verificar que el usuario existe
+            const user = await users.findByPk(ownerId);
+            if (!user) {
+                return res.status(404).json({
+                    success: false,
+                    status: 404,
+                    message: 'Usuario no encontrado'
+                });
+            }
+
+            // 3. Eliminar imagen anterior si existe (usando public_id desde BD)
+            if (currentImagePublicId) {
+                try {
+                    const deleteResult = await cloudinary.uploader.destroy(currentImagePublicId);
+
+                    if (deleteResult.result === 'ok') {
+
+                        previousImageDeleted = true;
+                    }
+                } catch (deleteError) {
+                    return res.status(500).json({
+                        success: false,
+                        status: 500,
+                        message: 'Ups! Ocurrio un error, por favor intente de nuevo'
+                    });
+                }
+            }
+
+            // 4. Optimizar imagen (tamaño estándar para perfiles)
+            const maxWidth = 400;
+            const maxHeight = 400;
+            const { optimizeImage } = require('../utils/imageOptimizer');
+            const optimizedBuffer = await optimizeImage(file.buffer, maxWidth, maxHeight);
+
+            // 5. Subir a Cloudinary con estructura: FabriApp/ownerEmail/companyName/users
+            cloudinaryResult = await uploadToCloudinaryUnified(optimizedBuffer, {
+                ownerEmail: ownerEmail,
+                companyName: companyName,
+                itemName: userName,
+                imageType: imageType || 'profile_image',
+                entityType: 'users',
+                tags: [userName]
+            });
+
+            // 6. Verificar que la subida a Cloudinary fue exitosa
+            if (!cloudinaryResult || !cloudinaryResult.secure_url || !cloudinaryResult.public_id) {
+                console.error('❌ Subida a Cloudinary falló - Respuesta incompleta:', cloudinaryResult);
+                return res.status(500).json({
+                    success: false,
+                    status: 500,
+                    message: 'Error al subir la imagen, por favor intente de nuevo'
+                });
+            }
+
+            // 7. Actualizar imagen en tabla users
+            await user.update({
+                image_url: cloudinaryResult.secure_url,
+                image_public_id: cloudinaryResult.public_id
+            });
+
+            console.log('✅ Imagen de perfil subida exitosamente:', {
+                userId: user.id,
+                newImageUrl: cloudinaryResult.secure_url,
+                publicId: cloudinaryResult.public_id
+            });
+
+            // 8. Respuesta exitosa
+            return res.json({
+                success: true,
+                status: 200,
+                message: "Imagen de perfil subida exitosamente",
+                imageUrl: cloudinaryResult.secure_url,
+                imagePublicId: cloudinaryResult.public_id
+            });
+
+        } catch (error) {
+            console.error('❌ Error en uploadProfileImage:', error);
+
+            // Limpieza en caso de error después de subir a Cloudinary
+            if (cloudinaryResult?.public_id) {
+                await cloudinary.uploader.destroy(cloudinaryResult.public_id)
+                    .catch(e => console.error('Error limpiando imagen de Cloudinary:', e));
+            }
+
+            return res.status(500).json({
+                success: false,
+                status: 500,
+                message: 'Error interno del servidor al subir imagen',
+                details: process.env.NODE_ENV === 'development' ? error.message : null
+            });
+        }
+    }
 
 };
 
@@ -433,24 +576,97 @@ function getHeightFromAspect(aspect) {
     }
 }
 
-async function uploadToCloudinary(buffer, storeName, storeType, imageType, user, companyName) {
+// 🎯 FUNCIÓN UNIFICADA PARA SUBIR IMÁGENES A CLOUDINARY
+// Estructura: FabriApp/ownerEmail/companyName/{entityType}
+async function uploadToCloudinaryUnified(buffer, {
+    ownerEmail,
+    companyName,
+    itemName,        // nombre del usuario o tienda
+    imageType,       // 'profile_image', 'store_image', etc.
+    entityType,      // 'users' o 'stores'
+    tags = [],       // tags adicionales
+    transformation = null
+}) {
+    // Normalizar solo para nombres de archivo y tags (NO para carpetas)
+    const normalizeForFileName = (str) => {
+        return str
+            .toLowerCase()
+            .trim()
+            .replace(/\s+/g, '_')
+            .replace(/[áàäâã]/g, 'a')
+            .replace(/[éèëê]/g, 'e')
+            .replace(/[íìïî]/g, 'i')
+            .replace(/[óòöô]/g, 'o')
+            .replace(/[úùüû]/g, 'u')
+            .replace(/ñ/g, 'n')
+            .replace(/[^\w-]/g, '_')
+            .replace(/_{2,}/g, '_')
+            .replace(/^_|_$/g, '');
+    };
+
+    // Generar estructura de carpetas SIN normalizar: FabriApp/ownerEmail/companyName/{entityType}
+    const folderPath = `FabriApp/${ownerEmail}/${companyName}/${entityType}`;
+
+    // Generar public_id único: itemName_imageType_timestamp_hash
+    const timestamp = Date.now();
+    const hash = Math.random().toString(36).substring(2, 8);
+    const publicId = `${normalizeForFileName(itemName)}_${imageType}_${timestamp}_${hash}`;
+
+    // Tags base + tags adicionales (normalizados para Cloudinary)
+    const baseTags = ['fabriapp', entityType.slice(0, -1), imageType, normalizeForFileName(companyName)];
+    const normalizedAdditionalTags = tags.map(tag => normalizeForFileName(tag));
+    const allTags = [...baseTags, ...normalizedAdditionalTags].filter(Boolean);
+
     const uploadOptions = {
-        folder: `FabriApp/stores/${companyName}`,
-        public_id: `${storeName || 'store'}_${Date.now()}`,
+        folder: folderPath,
+        public_id: publicId,
         format: 'webp',
         resource_type: 'image',
+        quality: 85,
         context: {
-            caption: `Name: ${storeName || ''}`,
-            alt: `Type (${storeType || ''})`,
-            uploadedBy: user.email || '',
+            caption: `${entityType}: ${itemName}`,
+            alt: `${entityType} image`,
+            uploadedBy: ownerEmail,
+            company: companyName
         },
-        tags: ['store', storeType || '', imageType || ''].filter(Boolean)
+        tags: allTags,
+        transformation: transformation || [
+            {
+                width: entityType === 'users' ? 400 : 300,
+                height: entityType === 'users' ? 400 : 300,
+                crop: 'fill',
+                gravity: entityType === 'users' ? 'face' : 'center',
+                quality: 'auto:good'
+            }
+        ]
     };
+
+    console.log("☁️ Subiendo imagen a Cloudinary:", {
+        folder: uploadOptions.folder,
+        public_id: uploadOptions.public_id,
+        tags: uploadOptions.tags,
+        entityType
+    });
 
     return new Promise((resolve, reject) => {
         const uploadStream = cloudinary.uploader.upload_stream(
             uploadOptions,
-            (error, result) => error ? reject(error) : resolve(result)
+            (error, result) => {
+                if (error) {
+                    console.error('❌ Error en Cloudinary:', error);
+                    reject(error);
+                } else {
+                    console.log('✅ Subida exitosa a Cloudinary:', {
+                        public_id: result.public_id,
+                        secure_url: result.secure_url,
+                        folder: result.folder,
+                        width: result.width,
+                        height: result.height,
+                        bytes: result.bytes
+                    });
+                    resolve(result);
+                }
+            }
         );
         const bufferStream = new stream.PassThrough();
         bufferStream.end(buffer);

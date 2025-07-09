@@ -7,10 +7,11 @@ const supplies_stockController = require('./supplies_stock_controller');
 const routesController = require('./routes_controller');
 const store_typesController = require('./store_types_controller');
 const storesController = require('./stores_controller');
-const upload_store_imageController = require('./image_upload_controller');
+const image_uploadController = require('./image_upload_controller');
 const store_imagesController = require('./store_images_controller');
 const register_company_and_userController = require('./register_company_and_user_controller');
 const companyController = require('./company_controller');
+const rolesController = require('./roles_controller');
 
 module.exports = {
     userController,
@@ -22,9 +23,10 @@ module.exports = {
     routesController,
     store_typesController,
     storesController,
-    upload_store_imageController,
+    image_uploadController,
     store_imagesController,
     register_company_and_userController,
-    companyController
+    companyController,
+    rolesController
     
 };

@@ -1,12 +1,70 @@
 const express = require('express');
-const { upload_store_imageController } = require('../controllers');
+const { image_uploadController } = require('../controllers');
 const { verifyToken } = require('../middlewares/jwt.middleware');
 const upload = require('../middlewares/uploadImages.middleware');
 
+// 🛡️ IMPORTAR RATE LIMITING PARA SUBIDA DE IMÁGENES
+const {
+    createImageUploadLimiter,
+    createGeneralLimiter
+} = require('../middlewares/smartRateLimit.middleware');
+
 const router = express.Router();
 
+// 🛡️ LIMITADORES PERSONALIZADOS PARA SUBIDA DE IMÁGENES
+// Subir imagen de tienda - Moderado (consume recursos del servidor)
+const uploadStoreImageLimiter = createImageUploadLimiter({
+    windowMs: 60 * 60 * 1000,      // 1 hora
+    maxByIP: 20,                   // 20 imágenes por hora por IP
+    maxByUser: 60,                 // 60 imágenes por hora por usuario
+    message: "Límite de subida de imágenes de tienda alcanzado",
+    enableOwnerBonus: true,        // OWNERS: 90 imágenes/hora
+    skipSuccessfulRequests: true   // Solo contar uploads fallidos
+});
+
+// Subir imagen de perfil - Más restrictivo (menos frecuente)
+const uploadProfileImageLimiter = createImageUploadLimiter({
+    windowMs: 60 * 60 * 1000,      // 1 hora
+    maxByIP: 10,                   // 10 imágenes por hora por IP
+    maxByUser: 25,                 // 25 imágenes por hora por usuario
+    message: "Límite de subida de imágenes de perfil alcanzado",
+    enableOwnerBonus: true,        // OWNERS: 37 imágenes/hora
+    skipSuccessfulRequests: true   // Solo contar uploads fallidos
+});
+
+// Eliminar imagen - Más generoso (operación menos costosa)
+const deleteImageLimiter = createGeneralLimiter({
+    windowMs: 15 * 60 * 1000,      // 15 minutos
+    maxByIP: 40,                   // 40 eliminaciones por IP
+    maxByUser: 100,                // 100 eliminaciones por usuario
+    message: "Límite de eliminación de imágenes alcanzado",
+    enableOwnerBonus: true,        // OWNERS: 150 eliminaciones/15min
+    skipSuccessfulRequests: false  // Contar todas las eliminaciones
+});
+
 // api/upload_images/
-router.post('/store', verifyToken, upload.single('image'), upload_store_imageController.uploadStoreImage); // subir imagen de tienda
-router.delete('/delete', verifyToken,  upload_store_imageController.deleteStoreImage); // eliminar imagen de tienda
+
+// subir imagen de tienda
+router.post('/store', 
+    verifyToken, 
+    uploadStoreImageLimiter, // 🔒 60 imágenes/hora (consume recursos)
+    upload.single('image'), 
+    image_uploadController.uploadStoreImage
+); 
+
+// eliminar imagen de tienda
+router.delete('/delete', 
+    verifyToken, 
+    deleteImageLimiter, // 🔒 100 eliminaciones/15min (operación menos costosa)
+    image_uploadController.deleteStoreImage
+); 
+
+// subir imagen de perfil de usuario
+router.post('/profile', 
+    verifyToken, 
+    uploadProfileImageLimiter, // 🔒 25 imágenes/hora (menos frecuente)
+    upload.single('image'), 
+    image_uploadController.uploadProfileImage
+);
 
 module.exports = router;

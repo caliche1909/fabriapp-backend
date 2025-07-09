@@ -1,94 +1,61 @@
 const db = require('./models');
 
-async function testPermissions() {
+async function testRolesStructure() {
     try {
-        // Consultar todos los permisos organizados por módulo y submódulo
-        const modules = await db.modules.findAll({
-            include: [{
-                model: db.submodules,
-                as: 'submodules',
-                include: [{
-                    model: db.permissions,
-                    as: 'permissions'
-                }]
-            }],
-            order: [
-                ['name', 'ASC'],
-                [{ model: db.submodules, as: 'submodules' }, 'name', 'ASC'],
-                [{ model: db.submodules, as: 'submodules' }, { model: db.permissions, as: 'permissions' }, 'name', 'ASC']
-            ]
+        console.log('\n🔍 ANALIZANDO ESTRUCTURA DE LA TABLA ROLES EN BASE DE DATOS...\n');
+
+        // Obtener información de la tabla roles
+        const queryInterface = db.sequelize.getQueryInterface();
+        const tableInfo = await queryInterface.describeTable('roles');
+
+        console.log('=== ESTRUCTURA DE LA TABLA ROLES ===\n');
+        console.log('📋 CAMPOS DISPONIBLES:');
+        Object.keys(tableInfo).forEach(field => {
+            const info = tableInfo[field];
+            console.log(`   • ${field}: ${info.type} (${info.allowNull ? 'NULL' : 'NOT NULL'})`);
         });
 
-        console.log('\n=== PERMISOS DEL SISTEMA ===\n');
-        
-        // Crear tabla para mostrar los permisos
-        console.log('┌─────────────────┬─────────────────┬──────────────────┬────────────────────────────────┐');
-        console.log('│     MÓDULO      │    SUBMÓDULO    │     PERMISO      │         DESCRIPCIÓN           │');
-        console.log('├─────────────────┼─────────────────┼──────────────────┼────────────────────────────────┤');
+        // Consultar algunos roles para ver los datos
+        console.log('\n=== MUESTRA DE DATOS EN LA TABLA ROLES ===\n');
+        const sampleRoles = await db.roles.findAll({
+            limit: 5,
+            order: [['name', 'ASC']]
+        });
 
-        // Variables para contar
-        let totalModules = 0;
-        let totalSubmodules = 0;
-        let totalPermissions = 0;
-
-        // Iterar sobre los módulos
-        for (const module of modules) {
-            totalModules++;
-            
-            if (module.submodules && module.submodules.length > 0) {
-                for (const submodule of module.submodules) {
-                    totalSubmodules++;
-                    
-                    if (submodule.permissions && submodule.permissions.length > 0) {
-                        for (const permission of submodule.permissions) {
-                            totalPermissions++;
-                            
-                            // Formatear cada columna para que tenga un ancho fijo
-                            const moduleName = module.name.padEnd(15).slice(0, 15);
-                            const submoduleName = submodule.name.padEnd(15).slice(0, 15);
-                            const permissionName = permission.name.padEnd(16).slice(0, 16);
-                            const description = (permission.description || 'Sin descripción').padEnd(30).slice(0, 30);
-
-                            console.log(`│ ${moduleName} │ ${submoduleName} │ ${permissionName} │ ${description} │`);
-                        }
-                    } else {
-                        // Submódulo sin permisos
-                        const moduleName = module.name.padEnd(15).slice(0, 15);
-                        const submoduleName = submodule.name.padEnd(15).slice(0, 15);
-                        console.log(`│ ${moduleName} │ ${submoduleName} │ Sin permisos    │ ----------------------------- │`);
-                    }
-                }
-            } else {
-                // Módulo sin submódulos
-                const moduleName = module.name.padEnd(15).slice(0, 15);
-                console.log(`│ ${moduleName} │ Sin submódulos │ --------------  │ ----------------------------- │`);
-            }
+        if (sampleRoles.length > 0) {
+            console.log('📋 PRIMEROS 5 ROLES:');
+            sampleRoles.forEach((role, index) => {
+                console.log(`\n${index + 1}. ${role.name} (${role.id})`);
+                console.log(`   • Label: ${role.label || 'Sin label'}`);
+                console.log(`   • Description: ${role.description || 'Sin descripción'}`);
+                console.log(`   • Is Global: ${role.is_global ? 'Sí' : 'No'}`);
+                console.log(`   • Company ID: ${role.company_id || 'NULL (global)'}`);
+                console.log(`   • Created At: ${role.created_at}`);
+            });
+        } else {
+            console.log('❌ No se encontraron roles en la base de datos');
         }
 
-        console.log('└─────────────────┴─────────────────┴──────────────────┴────────────────────────────────┘');
+        // Verificar si el campo description existe
+        const hasDescription = tableInfo.hasOwnProperty('description');
+        console.log('\n=== VERIFICACIÓN DEL CAMPO DESCRIPTION ===');
+        console.log(`🔍 Campo 'description' existe: ${hasDescription ? '✅ SÍ' : '❌ NO'}`);
 
-        // Mostrar totales
-        console.log('\n=== TOTALES ===');
-        console.log(`📊 Total de módulos: ${totalModules}`);
-        console.log(`📊 Total de submódulos: ${totalSubmodules}`);
-        console.log(`📊 Total de permisos: ${totalPermissions}`);
-
-        // Mostrar todos los códigos de permisos en una lista
-        console.log('\n=== LISTA DE CÓDIGOS DE PERMISOS ===');
-        for (const module of modules) {
-            for (const submodule of module.submodules) {
-                for (const permission of submodule.permissions) {
-                    console.log(`- ${permission.code} (${permission.name})`);
-                }
-            }
+        if (hasDescription) {
+            console.log(`📋 Tipo de dato: ${tableInfo.description.type}`);
+            console.log(`📋 Permite NULL: ${tableInfo.description.allowNull ? 'Sí' : 'No'}`);
+        } else {
+            console.log('⚠️  El campo description NO existe en la tabla roles');
+            console.log('💡 Necesita agregarse para incluir descripciones en las respuestas');
         }
 
     } catch (error) {
-        console.error("\n❌ Error al consultar permisos:", error.message);
+        console.error("\n❌ Error al consultar estructura de la tabla roles:", error.message);
         console.error("Stack:", error.stack);
     } finally {
         await db.sequelize.close();
     }
 }
 
-testPermissions();
+// Ejecutar la función
+testRolesStructure();

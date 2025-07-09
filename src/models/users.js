@@ -86,6 +86,11 @@ module.exports = function (sequelize, DataTypes) {
       },
       comment: 'URL de la imagen de perfil del usuario almacenada en la web'
     },
+    image_public_id: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+      comment: 'Public ID de Cloudinary para la imagen de perfil del usuario'
+    },
     status: {
       type: DataTypes.STRING(10),
       allowNull: false,

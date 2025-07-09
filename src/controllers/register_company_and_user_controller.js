@@ -82,7 +82,7 @@ module.exports = {
                     throw new Error('El rol OWNER no existe en el sistema');
                 }
 
-                // 5.2 Crear el usuario (sin role_id global)
+                // 5.2 Crear el usuario 
                 newUser = await users.create({
                     email,
                     password: plainPassword,
@@ -92,7 +92,7 @@ module.exports = {
                     status: 'inactive'
                 }, { transaction });
 
-                // 5.3 Crear la compañía (SIN owner_id) por que ya no esta
+                // 5.3 Crear la compañía 
                 newCompany = await companies.create({
                     name: companyName,
                     legal_name: companyName,

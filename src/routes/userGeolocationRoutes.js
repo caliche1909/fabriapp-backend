@@ -3,6 +3,11 @@ const router = express.Router();
 const userGeolocationController = require('../controllers/user_geolocation_controller');
 const jwtMiddleware = require('../middlewares/jwt.middleware');
 
+// 🛡️ LIMITADORES PERSONALIZADOS PARA GEOLOCALIZACIÓN DE USUARIOS
+// Nota: falta implementar los limitadores ojo!!
+
+
+
 // Middleware JWT para todas las rutas
 router.use(jwtMiddleware.verifyToken);
 

@@ -2,6 +2,7 @@ const { users, roles, permissions, companies, user_companies, user_current_posit
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { Op } = require('sequelize');
+const { sendWelcomeEmail } = require('../utils/emailNotifier');
 
 const SALT_ROUNDS = 10;
 const SECRET_KEY = process.env.JWT_SECRET;
@@ -156,38 +157,75 @@ module.exports = {
                 ]
             });
 
+            // 🔥 OBTENER INFORMACIÓN DE LOS OWNERS DE CADA EMPRESA
+            const companyIds = userCompaniesData.map(uc => uc.company_id);
+            const companyOwnersData = await user_companies.findAll({
+                where: {
+                    company_id: { [Op.in]: companyIds },
+                    user_type: 'owner',
+                    status: 'active'
+                },
+                include: [
+                    {
+                        model: users,
+                        as: 'user',
+                        attributes: ['id', 'email']
+                    }
+                ]
+            });
+
+            // 🔥 CREAR MAPA DE OWNERS POR EMPRESA
+            const ownersMap = {};
+            companyOwnersData.forEach(ownerRelation => {
+                const companyId = ownerRelation.company_id;
+                const owner = ownerRelation.user;
+
+                ownersMap[companyId] = {
+                    id: owner.id,
+                    email: owner.email,
+                };
+            });
+
             // Formatear empresas con la nueva estructura
-            const allUserCompanies = userCompaniesData.map(userCompany => ({
-                id: userCompany.company.id,
-                name: userCompany.company.name,
-                legalName: userCompany.company.legal_name,
-                taxId: userCompany.company.tax_id,
-                email: userCompany.company.email,
-                phone: userCompany.company.phone,
-                address: userCompany.company.address,
-                city: userCompany.company.city,
-                state: userCompany.company.state,
-                country: userCompany.company.country,
-                postalCode: userCompany.company.postal_code,
-                logoUrl: userCompany.company.logo_url,
-                website: userCompany.company.website,
-                isActive: userCompany.company.is_active,
-                isDefault: userCompany.is_default,
-                userType: userCompany.user_type, // 'owner' o 'collaborator'
-                role: {
-                    id: userCompany.role.id,
-                    name: userCompany.role ? userCompany.role.name : 'COLLABORATOR',
-                    description: userCompany.role ? userCompany.role.description : '',
-                    permissions: userCompany.role && userCompany.role.permissions
-                        ? userCompany.role.permissions.map(permission => ({
-                            name: permission.name,
-                            code: permission.code,
-                            description: permission.description,
-                            isActive: permission.is_active
-                        }))
-                        : []
-                }
-            }));
+            const allUserCompanies = userCompaniesData.map(userCompany => {
+                const companyId = userCompany.company.id;
+                const owner = ownersMap[companyId] || null;
+
+                return {
+                    id: userCompany.company.id,
+                    name: userCompany.company.name,
+                    legalName: userCompany.company.legal_name,
+                    taxId: userCompany.company.tax_id,
+                    email: userCompany.company.email,
+                    phone: userCompany.company.phone,
+                    address: userCompany.company.address,
+                    city: userCompany.company.city,
+                    state: userCompany.company.state,
+                    country: userCompany.company.country,
+                    postalCode: userCompany.company.postal_code,
+                    logoUrl: userCompany.company.logo_url,
+                    website: userCompany.company.website,
+                    isActive: userCompany.company.is_active,
+                    isDefault: userCompany.is_default,
+                    userType: userCompany.user_type, // 'owner' o 'collaborator'  
+                    role: {
+                        id: userCompany.role.id,
+                        name: userCompany.role ? userCompany.role.name : 'COLLABORATOR',
+                        description: userCompany.role ? userCompany.role.description : '',
+                        permissions: userCompany.role && userCompany.role.permissions
+                            ? userCompany.role.permissions.map(permission => ({
+                                name: permission.name,
+                                code: permission.code,
+                                description: permission.description,
+                                isActive: permission.is_active
+                            }))
+                            : []
+                    },
+                    ownerId: owner ? owner.id : null,
+                    ownerEmail: owner ? owner.email : null,
+
+                };
+            });
 
             // 🎯 OBTENER EMPRESA POR DEFECTO para el token específico
             /*🔑 lA TABLA USER_COMPANIES TIENE UN TRIGER QUE CUANDO SE ACTUALIZA  UN CAMPO IS_DEFULT
@@ -259,6 +297,7 @@ module.exports = {
                 name: userForLogin.first_name,
                 lastName: userForLogin.last_name,
                 imageUrl: userForLogin.image_url,
+                imagePublicId: userForLogin.image_public_id,
                 countryCode: countryCode,
                 phone: phoneNumber,
                 status: userForLogin.status,
@@ -292,7 +331,7 @@ module.exports = {
     async update(req, res) {
         try {
             const { id } = req.params;
-            const { name, lastName, email, phone } = req.body;
+            const { name, lastName, phone } = req.body;
 
             const user = await users.findByPk(id);
             if (!user) {
@@ -301,24 +340,6 @@ module.exports = {
                     status: 404,
                     message: "Usuario no encontrado"
                 });
-            }
-
-            // Validar email único si se está actualizando
-            if (email && email !== user.email) {
-                const emailExists = await users.findOne({
-                    where: {
-                        email: email,
-                        id: { [Op.ne]: id } // Excluir el usuario actual
-                    }
-                });
-
-                if (emailExists) {
-                    return res.status(400).json({
-                        success: false,
-                        status: 400,
-                        message: "El email ya está en uso por otro usuario"
-                    });
-                }
             }
 
             // Validar teléfono único si se está actualizando
@@ -349,7 +370,8 @@ module.exports = {
 
             if (name) updateData.first_name = name;
             if (lastName) updateData.last_name = lastName;
-            if (email) updateData.email = email;
+            //no se debe actualizar el email, ya que es unico y se debe validar en el front
+            //if (email) updateData.email = email;
             if (phoneToUpdate) updateData.phone = phoneToUpdate;
 
 
@@ -376,6 +398,7 @@ module.exports = {
                 currentPosition: user.current_position,
                 email: user.email,
                 imageUrl: user.image_url,
+                imagePublicId: user.image_public_id,
                 lastName: user.last_name,
                 name: user.first_name,
                 phone: responsePhoneNumber,
@@ -476,7 +499,7 @@ module.exports = {
                 });
             }
 
-            
+
 
             // 🔑 Validar que la contraseña actual sea correcta
             const passwordMatch = await user.validatePassword(currentPassword);
@@ -496,8 +519,8 @@ module.exports = {
                 status: 200,
                 message: "Contraseña actualizada exitosamente"
             });
-            
-        } catch (error) {        
+
+        } catch (error) {
 
             // Manejo específico de errores de validación de Sequelize
             if (error.name === 'SequelizeValidationError') {
@@ -517,78 +540,399 @@ module.exports = {
         }
     },
 
+    // 📌 Crear un usuario
+    async createUser(req, res) {
+        let newUser = null;
+        let transaction = null;
+        let plainPassword = null;
 
-    
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    // 📌 REGISTRAR USUARIO + Token Automático
-    async register(req, res) {
         try {
-            const { password, email, name, phone } = req.body;
+            const { name, lastName, email, phone, role, requireGeolocation, companyId } = req.body;
 
-            // Validaciones
-            if (!password || !email || !name || !phone) {
-                return res.status(400).json({ message: "Todos los campos son obligatorios" });
+            console.log('👤 [UserController] Creando usuario:', { name, lastName, email, phone, role, requireGeolocation, companyId });
+
+            // 1. Validar que todos los campos requeridos estén presentes
+            if (!name || !lastName || !email || !phone || !role || !companyId) {
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: "Faltan datos para crear el usuario"
+                });
             }
 
-            // Verificar si el usuario ya existe
-            const userExists = await users.findOne({ where: { email } });
-            if (userExists) {
-                return res.status(400).json({ message: "El email proporcionado ya está en uso" });
+            // 2. Verificar si el email ya existe (fuera de transacción)
+            const existingUser = await users.findOne({ where: { email } });
+            if (existingUser) {
+                console.log('👤 [UserController] Usuario existente encontrado:', existingUser.email);
+
+                // Verificar si ya tiene relación con esta empresa
+                const existingRelation = await user_companies.findOne({
+                    where: {
+                        user_id: existingUser.id,
+                        company_id: companyId
+                    },
+                    include: [{
+                        model: roles,
+                        as: 'role',
+                        attributes: ['id', 'name', 'label']
+                    }]
+                });
+
+                if (existingRelation) {
+                    return res.status(409).json({
+                        success: false,
+                        status: 409,
+                        message: 'El usuario que intenta crear ya se encuentra registrado en su compañía',
+                        existingUser: false
+                    });
+                }
+
+                // Usuario existe pero no tiene relación con esta empresa
+                return res.status(409).json({
+                    success: false,
+                    status: 409,
+                    message: 'El usuario ya existe en el sistema',
+                    existingUser: true,
+                    userFound: {
+                        id: existingUser.id,
+                        email: existingUser.email,
+                        name: existingUser.first_name,
+                        lastName: existingUser.last_name,
+                        phone: existingUser.phone,
+                        status: existingUser.status,
+                        imageUrl: existingUser.image_url,
+                    },
+                    userDataToCreate: {
+                        name,
+                        lastName,
+                        email,
+                        phone,
+                        role,
+                        requireGeolocation,
+                        companyId
+                    }
+                });
             }
 
-            // Hashear la contraseña
-            const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
+            // 3. Verificar si el teléfono ya existe (fuera de transacción)
+            const existingPhone = await users.findOne({ where: { phone } });
+            if (existingPhone) {
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: 'El teléfono proporcionado ya está en uso'
+                });
+            }
 
-            // Crear usuario (sin role_id)
-            const newUser = await users.create({
-                password: hashedPassword,
-                email,
-                first_name: name,
-                last_name: name, // Simplificado
-                phone
-            });
+            // 4. Verificar que la empresa existe
+            const company = await companies.findByPk(companyId);
+            if (!company) {
+                return res.status(404).json({
+                    success: false,
+                    status: 404,
+                    message: 'Empresa no encontrada'
+                });
+            }
 
-            // ** Generar un token JWT al registrarse**
-            const token = jwt.sign({ id: newUser.id, email: newUser.email }, SECRET_KEY, { expiresIn: '8h' });
+            // 5. Verificar que el rol existe
+            const roleData = await roles.findByPk(role);
+            if (!roleData) {
+                return res.status(404).json({
+                    success: false,
+                    status: 404,
+                    message: 'El cargo asignado no existe'
+                });
+            }
 
-            console.log("✅ Usuario creado:", newUser);
+            // 6. Determinar el tipo de usuario basado en el rol
+            const userType = (roleData.name === 'OWNER') ? 'owner' : 'collaborator';
+            console.log(`👤 [UserController] Rol asignado: ${roleData.name}, Tipo usuario: ${userType}`);
 
-            const userWithoutPassword = {
-                id: newUser.id,
-                email: newUser.email,
-                name: newUser.first_name,
-                phone: newUser.phone
-            };
+            // 7. Generar contraseña provisional
+            const crypto = require('crypto');
+            plainPassword = crypto.randomBytes(8).toString('hex');
 
-            res.status(201).json({ message: "Usuario registrado exitosamente", token, user: userWithoutPassword });
+            // 8. Iniciar transacción
+            transaction = await sequelize.transaction();
+
+            try {
+                // 8.1 Crear el usuario con estado inactive
+                newUser = await users.create({
+                    email,
+                    password: plainPassword, // Se hashea automáticamente en el hook del modelo users
+                    first_name: name,
+                    last_name: lastName,
+                    phone,
+                    require_geolocation: requireGeolocation || false,
+                    status: 'inactive' // Usuario inactivo hasta primer login
+                }, { transaction });
+
+                console.log('👤 [UserController] Usuario creado:', newUser.id);
+
+                // 8.2 Crear la relación user_companies
+                await user_companies.create({
+                    user_id: newUser.id,
+                    company_id: companyId,
+                    role_id: role,
+                    user_type: userType,
+                    is_default: true,
+                    status: 'inactive'
+                }, { transaction });
+
+                console.log('👤 [UserController] Relación user_companies creada');
+
+                const welcomeEmailData = {
+                    email: newUser.email,
+                    fullName: `${name} ${lastName}`,
+                    companyName: company.name,
+                    password: plainPassword // Enviamos la contraseña sin hashear
+                };
+
+                console.log('📧 [UserController] Enviando email de bienvenida...');
+                const emailSent = await sendWelcomeEmail(welcomeEmailData);
+
+                if (!emailSent) {
+                    await transaction.rollback();
+
+                    return res.status(500).json({
+                        success: false,
+                        status: 500,
+                        message: 'Error al enviar el email de bienvenida. El usurio no fue creado.'
+                    });
+                }
+
+                await transaction.commit();
+
+                console.log('✅ [UserController] Usuario creado exitosamente');
+
+                // 10. Respuesta exitosa
+                return res.status(201).json({
+                    success: true,
+                    status: 201,
+                    message: 'Usuario creado exitosamente. Se ha enviado un email con las credenciales de acceso.',
+                    existingUser: false,
+                    user: {
+                        id: newUser.id,
+                        email: newUser.email,
+                        name: newUser.first_name,
+                        lastName: newUser.last_name,
+                        phone: newUser.phone,
+                        status: newUser.status,
+                        userType: userType,
+                        role: {
+                            id: roleData.id,
+                            name: roleData.name,
+                            label: roleData.label
+                        }
+                    }
+                });
+
+            } catch (innerError) {
+                // Si algo falla durante la transacción, hacemos rollback
+                if (transaction) await transaction.rollback();
+                console.error('❌ [UserController] Error en transacción:', innerError);
+                throw innerError;
+            }
 
         } catch (error) {
-            console.error("❌ Error en register:", error.message);
-            res.status(500).json({ error: error.message });
+            console.error("❌ [UserController] Error en createUser:", error);
+
+            // Manejar diferentes tipos de errores
+            let statusCode = 500;
+            let message = 'Error interno del servidor al crear usuario';
+
+            if (error.name === 'SequelizeValidationError') {
+                statusCode = 400;
+                message = 'Error de validación: ' + error.errors.map(err => err.message).join(', ');
+            } else if (error.name === 'SequelizeUniqueConstraintError') {
+                statusCode = 400;
+                if (error.original && error.original.constraint) {
+                    switch (error.original.constraint) {
+                        case 'users_email_key':
+                            message = 'El email ya está registrado en el sistema';
+                            break;
+                        case 'users_phone_key':
+                            message = 'El teléfono ya está registrado en el sistema';
+                            break;
+                        default:
+                            message = 'Ya existe un registro con estos datos';
+                    }
+                }
+            }
+
+            return res.status(statusCode).json({
+                success: false,
+                status: statusCode,
+                message: message
+            });
         }
     },
+
+    // 📌 Asignar usuario existente a empresa
+    async createExistingUser(req, res) {
+        let transaction = null;
+
+        try {
+            const { userFound, userDataToCreate } = req.body;
+
+            // 1. Validar que todos los campos requeridos estén presentes
+            if (!userFound || !userDataToCreate || !userFound.id || !userDataToCreate.companyId || !userDataToCreate.role) {
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: "Faltan datos para asignar el usuario"
+                });
+            }
+
+            // 2. Verificar que el usuario existe
+            const existingUser = await users.findByPk(userFound.id);
+            if (!existingUser) {
+                return res.status(404).json({
+                    success: false,
+                    status: 404,
+                    message: 'Usuario no encontrado'
+                });
+            }
+
+            // 3. Verificar que la empresa existe
+            const company = await companies.findByPk(userDataToCreate.companyId);
+            if (!company) {
+                return res.status(404).json({
+                    success: false,
+                    status: 404,
+                    message: 'Empresa no encontrada'
+                });
+            }
+
+            // 4. Verificar que el rol existe
+            const roleData = await roles.findByPk(userDataToCreate.role);
+            if (!roleData) {
+                return res.status(404).json({
+                    success: false,
+                    status: 404,
+                    message: 'El cargo asignado no existe'
+                });
+            }
+
+            // 5. Verificar que no existe ya una relación activa
+            const existingRelation = await user_companies.findOne({
+                where: {
+                    user_id: userFound.id,
+                    company_id: userDataToCreate.companyId
+                }
+            });
+
+            if (existingRelation) {
+                if (existingRelation.status === 'active') {
+                    return res.status(409).json({
+                        success: false,
+                        status: 409,
+                        message: 'El usuario ya está activo en esta empresa'
+                    });
+                } else {
+                    // Reactivar relación existente
+                    await existingRelation.update({
+                        role_id: userDataToCreate.role,
+                        status: 'active',
+                        user_type: (roleData.name === 'OWNER' || roleData.name === 'owner') ? 'owner' : 'collaborator'
+                    });
+
+                    return res.status(200).json({
+                        success: true,
+                        status: 200,
+                        message: 'Usuario reactivado exitosamente en la empresa',
+                        user: {
+                            id: existingUser.id,
+                            email: existingUser.email,
+                            name: existingUser.first_name,
+                            lastName: existingUser.last_name,
+                            phone: existingUser.phone,
+                            status: existingUser.status,
+                            userType: (roleData.name === 'OWNER') ? 'owner' : 'collaborator',
+                            role: {
+                                id: roleData.id,
+                                name: roleData.name,
+                                label: roleData.label
+                            }
+                        }
+                    });
+                }
+            }
+
+            // 6. Determinar el tipo de usuario basado en el rol
+            const userType = (roleData.name === 'OWNER') ? 'owner' : 'collaborator';
+            console.log(`👤 [UserController] Rol asignado: ${roleData.name}, Tipo usuario: ${userType}`);
+
+            // 7. Actualizar datos del usuario si es necesario
+            existingUser.require_geolocation = userDataToCreate.requireGeolocation || existingUser.require_geolocation;
+            await existingUser.save();
+
+            // 8. Iniciar transacción para crear la relación
+            transaction = await sequelize.transaction();
+
+            try {
+                // 8.1 Crear la relación user_companies
+                await user_companies.create({
+                    user_id: existingUser.id,
+                    company_id: userDataToCreate.companyId,
+                    role_id: userDataToCreate.role,
+                    user_type: userType,
+                    is_default: true, // No es empresa por defecto ya que el usuario ya existe
+                    status: 'active' // Usuario existente se activa inmediatamente
+                }, { transaction });
+
+                console.log('👤 [UserController] Relación user_companies creada para usuario existente');
+
+                // 8.2 Confirmar la transacción
+                await transaction.commit();
+
+                console.log('✅ [UserController] Usuario existente asignado exitosamente');
+
+                // 9. Respuesta exitosa
+                return res.status(201).json({
+                    success: true,
+                    status: 201,
+                    message: 'Usuario asignado exitosamente.',
+                    user: {
+                        id: existingUser.id,
+                        email: existingUser.email,
+                        name: existingUser.first_name,
+                        lastName: existingUser.last_name,
+                        phone: existingUser.phone,
+                        status: existingUser.status,
+                        userType: userType,
+                        role: {
+                            id: roleData.id,
+                            name: roleData.name,
+                            label: roleData.label
+                        }
+                    }
+                });
+
+            } catch (innerError) {
+                // Si algo falla durante la transacción, hacemos rollback
+                if (transaction) await transaction.rollback();
+                console.error('❌ [UserController] Error en transacción:', innerError);
+                throw innerError;
+            }
+
+        } catch (error) {
+            console.error("❌ [UserController] Error en createExistingUser:", error);
+
+            return res.status(500).json({
+                success: false,
+                status: 500,
+                message: 'Error interno del servidor al asignar usuario'
+            });
+        }
+    },
+
+
+
+
+    /*----------------------------------------------------METODOS QUE NO SE ESTAN USANDO AUN ----------------------------------------*/
+
+
 
     // 📌 Obtener todos los usuarios
     async list(req, res) {
@@ -901,7 +1245,7 @@ module.exports = {
         }
     },
 
-    // 📌 ESTADÍSTICAS DE USUARIOS
+    // �� ESTADÍSTICAS DE USUARIOS
     async getUserStats(req, res) {
         try {
             const stats = await users.findAll({

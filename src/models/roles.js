@@ -11,11 +11,32 @@ module.exports = function (sequelize, DataTypes) {
     name: {
       type: DataTypes.STRING(50),
       allowNull: false,
-      unique: "roles_name_key",
       validate: {
         notEmpty: true,
         notNull: true
       }
+    },
+    label: {
+      type: DataTypes.STRING(100),
+      allowNull: true,
+      validate: {
+        len: {
+          args: [2, 100],
+          msg: 'La etiqueta debe tener entre 2 y 100 caracteres'
+        }
+      },
+      comment: 'Etiqueta amigable para mostrar en la interfaz de usuario'
+    },
+    description: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      validate: {
+        len: {
+          args: [0, 500],
+          msg: 'La descripción no puede exceder 500 caracteres'
+        }
+      },
+      comment: 'Descripción detallada del rol y sus responsabilidades'
     },
     is_global: {
       type: DataTypes.BOOLEAN,
@@ -49,6 +70,12 @@ module.exports = function (sequelize, DataTypes) {
       type: DataTypes.DATE,
       allowNull: false,
       defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
+    },
+    is_active: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: true,
+      comment: 'Indica si el rol está activo o ha sido deshabilitado'
     }
   }, {
     sequelize,
@@ -60,9 +87,13 @@ module.exports = function (sequelize, DataTypes) {
     createdAt: 'created_at',
     updatedAt: 'updated_at',
     hooks: {
-      beforeDestroy: async (role, options) => {
-        if (role.is_global) {
-          throw new Error('No se pueden eliminar roles globales');
+      beforeCreate: async (role, options) => {
+        // Normalizar name y label antes de crear
+        if (role.name) {
+          role.name = Role.normalizeName(role.name);
+        }
+        if (role.label) {
+          role.label = Role.normalizeLabel(role.label);
         }
       },
       beforeUpdate: async (role, options) => {
@@ -75,14 +106,30 @@ module.exports = function (sequelize, DataTypes) {
             throw new Error('No se puede modificar el estado global de un rol global');
           }
         }
+        
+        // Normalizar name y label antes de actualizar (solo para roles no globales)
+        if (!oldRole.is_global) {
+          if (role.name) {
+            role.name = Role.normalizeName(role.name);
+          }
+          if (role.label) {
+            role.label = Role.normalizeLabel(role.label);
+          }
+        }
+      },
+      beforeDestroy: async (role, options) => {
+        if (role.is_global) {
+          throw new Error('No se pueden eliminar roles globales');
+        }
       }
     },
     indexes: [
       {
-        name: "roles_name_key",
+        name: "roles_name_company_unique",
         unique: true,
         fields: [
           { name: "name" },
+          { name: "company_id" }
         ]
       },
       {
@@ -102,9 +149,30 @@ module.exports = function (sequelize, DataTypes) {
         fields: [
           { name: "company_id" },
         ]
+      },
+      {
+        name: "idx_roles_label",
+        fields: [
+          { name: "label" },
+        ]
       }
     ]
   });
+
+  // Métodos estáticos para normalización
+  Role.normalizeName = function(roleName) {
+    // Convertir a mayúsculas, quitar espacios y reemplazar espacios con guiones bajos
+    return roleName
+      .trim()                    // Quitar espacios al inicio y final
+      .toUpperCase()             // Convertir a mayúsculas
+      .replace(/\s+/g, '_');     // Reemplazar espacios con guion bajo
+  };
+
+  Role.normalizeLabel = function(roleLabel) {
+    // Capitalizar primera letra y quitar espacios al inicio/final
+    const trimmed = roleLabel.trim();
+    return trimmed.charAt(0).toUpperCase() + trimmed.slice(1).toLowerCase();
+  };
 
   // Método estático para obtener roles globales
   Role.getGlobalRoles = function() {
