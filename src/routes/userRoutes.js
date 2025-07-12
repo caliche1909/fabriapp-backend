@@ -17,6 +17,7 @@ const router = express.Router();
 const loginLimiter = createLoginLimiter({
     trustedIPs: [], // IPs administrativas
     message: "Demasiados intentos de login. Intente más tarde"
+
 });
 
 // Crear usuario - Moderado (operación de configuración)  
@@ -80,11 +81,19 @@ router.post('/create-existing-user',
 );
 
 // 🔄 ENDPOINTS DE ACTUALIZACIÓN CON LÍMITES ESPECÍFICOS
-router.put('/update-user/:id',
+router.put('/update-user-profile/:id',
     verifyToken,
     checkAnyPermission(['update-personal-user']),
     updateUserLimiter, // 🔒 100 actualizaciones/15min (operación común)
     userController.update
+);
+
+// 🔄 ACTUALIZAR USUARIOS DE COMPAÑIA
+router.put('/update-users-of-company/:id',
+    verifyToken,
+    //checkPermission('update-users'),
+    updateUserLimiter, // 🔒 100 actualizaciones/15min (operación común)
+    userController.updateUsersOfCompany
 );
 
 router.put('/password-update/:id',
@@ -100,10 +109,22 @@ router.get('/getSellers/:company_id',
     userController.getSellers
 );
 
+// Obtener usuarios por compañía
+router.get('/company/:company_id',
+    verifyToken,
+    checkPermission('view-users'),
+    getSellersLimiter, // Reutilizamos el mismo limitador
+    userController.getUsersByCompany
+);
+
+
+module.exports = router;
+
 
 /*permisos de usuario en la base de datos
   update-personal-user -> permiso para actualizar los datos personales de un usuario,
   create-user -> permiso para crear un usuario,
+  view-users -> permiso para ver los usuarios de una compañía
 */
 
 /*----------------------------------------ENDPOINTS NO UTILIZADOS AÚN ----------------------------------------*/
@@ -122,5 +143,5 @@ router.get('/getSellers/:company_id',
 // router.post('/', generalLimiter, userController.create);
 // router.delete('/:id', generalLimiter, userController.delete);
 
-module.exports = router;
+
 

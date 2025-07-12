@@ -2,10 +2,153 @@ const cloudinary = require('../config/cloudenary.config');
 const { optimizeImage } = require('../utils/imageOptimizer');
 const storeImageController = require('./store_images_controller');
 const stream = require('stream');
-const { store_images, stores, sequelize, users } = require('../models');
+const { store_images, stores, sequelize, users, user_companies, companies } = require('../models');
 const { notifyAdmin } = require('../utils/emailNotifier');
 
 module.exports = {
+
+    // Método para eliminar un logo de empresa
+    async deleteCompanyLogoImage(req, res) {
+        const { companyId, publicId } = req.body;
+
+
+        try {
+            // ✅ PASO 1: Validaciones iniciales
+            if (!companyId || !publicId) {
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: 'Datos incompletos para realizar la operación'
+                });
+            }
+
+            // ✅ PASO 2: Verificar que el usuario existe
+            const userInDb = await users.findByPk(req.user?.id);
+            if (!userInDb) {
+                return res.status(401).json({
+                    success: false,
+                    status: 401,
+                    message: 'Usuario no autorizado'
+                });
+            }
+
+            // ✅ PASO 3: Verificar que la empresa existe
+            const companyInDb = await companies.findByPk(companyId);
+            if (!companyInDb) {
+                return res.status(404).json({
+                    success: false,
+                    status: 404,
+                    message: 'Empresa no encontrada'
+                });
+            }
+
+            // ✅ PASO 4: Verificar permisos (usuario debe ser owner de la empresa)
+            const userCompanyRelation = await user_companies.findOne({
+                where: {
+                    user_id: req.user?.id,
+                    company_id: companyId,
+                    status: 'active'
+                }
+            });
+
+            if (!userCompanyRelation) {
+                return res.status(403).json({
+                    success: false,
+                    status: 403,
+                    message: 'Accedo denegado para eliminar el logo de esta compañia'
+                });
+            }
+
+            if (userCompanyRelation.user_type !== 'owner') {
+                return res.status(403).json({
+                    success: false,
+                    status: 403,
+                    message: 'Solo el propietario puede eliminar el logo de la compañia'
+                });
+            }
+
+            // ✅ PASO 4: Validar que publicId esté presente
+            if (!publicId || publicId.trim() === '') {
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: 'Falta la llave de eliminacion de la imagen'
+                });
+            }
+
+            // ✅ PASO 5: Iniciar transacción
+            const transaction = await sequelize.transaction();
+
+            try {
+                // ✅ PASO 6: Actualizar BD PRIMERO (con transacción pendiente)
+                await companyInDb.update({
+                    logo_public_id: null,
+                    logo_url: null
+                }, { transaction });
+
+                // ✅ PASO 7: Eliminar de Cloudinary DESPUÉS
+                const deleteResult = await cloudinary.uploader.destroy(publicId);
+
+                // ✅ PASO 8: Evaluar resultado de Cloudinary
+                if (deleteResult.result === 'ok') {
+                    // Imagen eliminada exitosamente de Cloudinary
+                    await transaction.commit();
+                    return res.status(200).json({
+                        success: true,
+                        status: 200,
+                        message: 'Logo eliminado exitosamente',
+                        logoUrl: null,
+                        logoPublicId: null
+                    });
+                } else if (deleteResult.result === 'not found') {
+                    // Imagen no existía en Cloudinary (está bien, BD ya se actualizó)
+                    await transaction.commit();
+                    return res.status(200).json({
+                        success: true,
+                        status: 200,
+                        message: 'Logo eliminado exitosamente',
+                        logoUrl: null,
+                        logoPublicId: null
+                    });
+                } else {
+                    // Error desconocido en Cloudinary - revertir BD
+                    await transaction.rollback();
+                    return res.status(500).json({
+                        success: false,
+                        status: 500,
+                        message: 'Error al eliminar la imagen, por favor intente más tarde'
+                    });
+                }
+
+            } catch (error) {
+                // Error en BD o Cloudinary - revertir BD
+                await transaction.rollback();
+
+                if (error.message && error.message.includes('Invalid image public ID')) {
+                    return res.status(400).json({
+                        success: false,
+                        status: 400,
+                        message: 'ID de imagen inválido'
+                    });
+                }
+
+                return res.status(500).json({
+                    success: false,
+                    status: 500,
+                    message: 'Error al eliminar la imagen, por favor intente más tarde'
+                });
+            }
+
+        } catch (error) {
+            console.error('❌ Error general en deleteCompanyLogoImage:', error);
+            return res.status(500).json({
+                success: false,
+                status: 500,
+                message: 'Error interno del servidor al eliminar logo',
+                details: process.env.NODE_ENV === 'development' ? error.message : null
+            });
+        }
+    },
 
     // Metodo para eliminar una imagen de tienda
     async deleteStoreImage(req, res) {
@@ -321,7 +464,7 @@ module.exports = {
         let cloudinaryResult = null;
 
         console.log("📸 INICIO uploadStoreImage - Datos recibidos:", {
-            storeId, storeName, storeType, companyName, 
+            storeId, storeName, storeType, companyName,
             hasOwnerId: !!ownerId,
             hasOwnerEmail: !!ownerEmail,
             aspect, imageType
@@ -424,14 +567,186 @@ module.exports = {
         }
     },
 
+    // Método para subir una imagen de logo de empresa a cloudinary y guardar en la base de datos
+    async uploadCompanyLogoImage(req, res) {
+        const { file, body } = req;
+        const { companyId, companyName, aspect, imageType, ownerEmail, currentImagePublicId } = body;
+        let cloudinaryResult = null;
+
+        console.log("🏢 INICIO uploadCompanyLogoImage - Datos recibidos:", {
+            companyId,
+            companyName,
+            hasOwnerEmail: !!ownerEmail,
+            aspect,
+            imageType,
+            hasCurrentImagePublicId: !!currentImagePublicId,
+            hasFile: !!file,
+            fileSize: file?.size,
+            userId: req.user?.id // Usuario que hace la petición
+        });
+
+        try {
+            // ✅ PASO 1: Validaciones iniciales
+            if (!file || !file.buffer) {
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: 'Archivo no válido o faltante'
+                });
+            }
+
+            const requiredFields = ['companyId', 'companyName', 'aspect', 'imageType', 'ownerEmail'];
+            const missingFields = requiredFields.filter(field => !body[field]);
+            if (missingFields.length > 0) {
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: 'Datos incompletos',
+                    missingFields
+                });
+            }
+
+            // ✅ PASO 2: Verificar que el usuario existe
+            const userInDb = await users.findByPk(req.user?.id);
+            if (!userInDb) {
+                return res.status(401).json({
+                    success: false,
+                    status: 401,
+                    message: 'Usuario no autorizado'
+                });
+            }
+
+            // ✅ PASO 3: Verificar que la empresa existe en BD
+
+            const company = await companies.findByPk(companyId);
+            if (!company) {
+                return res.status(404).json({
+                    success: false,
+                    status: 404,
+                    message: 'Empresa no encontrada'
+                });
+            }
+
+            // ✅ PASO 4: Verificar permisos (usuario debe ser owner de la empresa)
+            const userCompanyRelation = await user_companies.findOne({
+                where: {
+                    user_id: req.user?.id,
+                    company_id: companyId,
+                    status: 'active'
+                }
+            });
+
+            if (!userCompanyRelation) {
+                return res.status(403).json({
+                    success: false,
+                    status: 403,
+                    message: 'No tienes acceso a esta empresa'
+                });
+            }
+
+            if (userCompanyRelation.user_type !== 'owner') {
+                return res.status(403).json({
+                    success: false,
+                    status: 403,
+                    message: 'Solo el propietario puede actualizar el logo de la empresa'
+                });
+            }
+
+            //Permisos verificados: Usuario es owner de la empresa
+
+            // ✅ PASO 5: Eliminar logo anterior si existe
+            if (currentImagePublicId) {
+                try {
+                    const deleteResult = await cloudinary.uploader.destroy(currentImagePublicId);
+
+                    if (deleteResult.result === 'ok') {
+                        console.log("✅ Logo anterior eliminado exitosamente");
+                    } else {
+                        console.log("⚠️ Logo anterior no encontrado en Cloudinary:", deleteResult);
+                    }
+                } catch (deleteError) {
+                    console.error("❌ Error eliminando logo anterior:", deleteError);
+                    return res.status(500).json({
+                        success: false,
+                        status: 500,
+                        message: 'Error al eliminar el logo anterior, por favor intente de nuevo'
+                    });
+                }
+            }
+
+            // ✅ PASO 6: Optimizar imagen (tamaño estándar para logos)
+            const maxWidth = 300;
+            const maxHeight = 300;
+            const optimizedBuffer = await optimizeImage(file.buffer, maxWidth, maxHeight);
+
+            // ✅ PASO 7: Subir a Cloudinary con estructura organizada
+            cloudinaryResult = await uploadToCloudinaryUnified(optimizedBuffer, {
+                ownerEmail: ownerEmail,
+                companyName: companyName,
+                itemName: companyName,
+                imageType: imageType || 'company_logo',
+                entityType: 'logos',
+                tags: [companyName, 'company_logo']
+            });
+
+            // ✅ PASO 8: Verificar que la subida a Cloudinary fue exitosa
+            if (!cloudinaryResult || !cloudinaryResult.secure_url || !cloudinaryResult.public_id) {
+                console.error('❌ Subida a Cloudinary falló - Respuesta incompleta:', cloudinaryResult);
+                return res.status(500).json({
+                    success: false,
+                    status: 500,
+                    message: 'Error al subir la imagen, por favor intente de nuevo'
+                });
+            }
+
+            // ✅ PASO 9: Actualizar la tabla companies en BD
+            await company.update({
+                logo_url: cloudinaryResult.secure_url,
+                logo_public_id: cloudinaryResult.public_id
+            });
+
+            console.log('✅ Logo de empresa subido exitosamente:', {
+                companyId: company.id,
+                companyName: company.name,
+                newLogoUrl: cloudinaryResult.secure_url,
+                publicId: cloudinaryResult.public_id
+            });
+
+            // ✅ PASO 10: Respuesta exitosa
+            return res.json({
+                success: true,
+                status: 200,
+                message: "Logo de empresa actualizado exitosamente",
+                imageUrl: cloudinaryResult.secure_url,
+                imagePublicId: cloudinaryResult.public_id
+            });
+
+        } catch (error) {
+            console.error('❌ Error en uploadCompanyLogoImage:', error);
+
+            // Limpieza en caso de error después de subir a Cloudinary
+            if (cloudinaryResult?.public_id) {
+                await cloudinary.uploader.destroy(cloudinaryResult.public_id)
+                    .catch(e => console.error('Error limpiando imagen de Cloudinary:', e));
+            }
+
+            return res.status(500).json({
+                success: false,
+                status: 500,
+                message: 'Error interno del servidor al subir imagen',
+                details: process.env.NODE_ENV === 'development' ? error.message : null
+            });
+        }
+    },
+
     // Método para subir una imagen de perfil de usuario a cloudinary y guardar en la base de datos
     async uploadProfileImage(req, res) {
         const { file, body } = req;
-        const { ownerId, userName, userEmail, companyName, aspect, imageType, ownerEmail, currentImagePublicId } = body;
+        const { userId, userName, userEmail, companyName, aspect, imageType, ownerEmail, currentImagePublicId } = body;
         let cloudinaryResult = null;
 
         console.log("📸 INICIO uploadProfileImage - Datos recibidos:", {
-            ownerId, userName, userEmail, companyName,
+            userId, userName, userEmail, companyName,
             hasOwnerEmail: !!ownerEmail,
             aspect, imageType,
             hasCurrentImagePublicId: !!currentImagePublicId
@@ -447,7 +762,7 @@ module.exports = {
                 });
             }
 
-            const requiredFields = ['ownerId', 'userName', 'userEmail', 'companyName', 'aspect'];
+            const requiredFields = ['userId', 'userName', 'userEmail', 'companyName', 'aspect'];
             const missingFields = requiredFields.filter(field => !body[field]);
             if (missingFields.length > 0) {
                 return res.status(400).json({
@@ -459,7 +774,7 @@ module.exports = {
             }
 
             // 2. Verificar que el usuario existe
-            const user = await users.findByPk(ownerId);
+            const user = await users.findByPk(userId);
             if (!user) {
                 return res.status(404).json({
                     success: false,

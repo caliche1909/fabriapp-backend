@@ -37,9 +37,11 @@ module.exports = function (sequelize, DataTypes) {
             allowNull: true,
             unique: 'companies_tax_id_key',
             validate: {
-                is: {
-                    args: /^[A-Z0-9\-]+$/,
-                    msg: 'El NIT/RUT solo puede contener letras mayúsculas, números y guiones'
+                isTaxIdValid: function(value) {
+                    if (value === null || value === '') return;
+                    if (!/^[A-Z0-9\-]+$/.test(value)) {
+                        throw new Error('El NIT/RUT solo puede contener letras mayúsculas, números y guiones');
+                    }
                 }
             }
         },
@@ -83,23 +85,42 @@ module.exports = function (sequelize, DataTypes) {
             type: DataTypes.STRING(10),
             allowNull: true
         },
+        neighborhood: {
+            type: DataTypes.STRING(100),
+            allowNull: true
+        },
         logo_url: {
             type: DataTypes.STRING(255),
             allowNull: true,
             validate: {
-                isUrl: {
-                    msg: 'El formato de la URL del logo no es válido'
+                isUrlOrEmpty: function(value) {
+                    if (value === null || value === '') return;
+                    if (!/^https?:\/\//.test(value)) {
+                        throw new Error('El formato de la URL del logo no es válido');
+                    }
                 }
             }
+        },
+        logo_public_id: {
+            type: DataTypes.STRING(255),
+            allowNull: true,
+            comment: 'Public ID de Cloudinary para el logo de la empresa, usado para eliminar la imagen'
         },
         website: {
             type: DataTypes.STRING(255),
             allowNull: true,
             validate: {
-                isUrl: {
-                    msg: 'El formato de la URL del sitio web no es válido'
+                isUrlOrEmpty: function(value) {
+                    if (value === null || value === '') return;
+                    if (!/^https?:\/\//.test(value)) {
+                        throw new Error('El formato de la URL del sitio web no es válido');
+                    }
                 }
             }
+        },
+        ubicacion: {
+            type: DataTypes.GEOMETRY('POINT', 4326),
+            allowNull: true
         },
         is_active: {
             type: DataTypes.BOOLEAN,
@@ -137,13 +158,72 @@ module.exports = function (sequelize, DataTypes) {
             {
                 name: "idx_companies_country",
                 fields: [{ name: "country" }]
+            },
+            {
+                name: "idx_companies_neighborhood",
+                fields: [{ name: "neighborhood" }]
+            },
+            {
+                name: "idx_companies_ubicacion",
+                using: 'GIST',
+                fields: [{ name: "ubicacion" }]
             }
         ]
     });
 
-    // Métodos de instancia
+    // Métodos de instancia para manejar PostGIS
+    Company.prototype.setUbicacion = function(lat, lng) {
+        return sequelize.fn('ST_SetSRID', 
+            sequelize.fn('ST_MakePoint', lng, lat), 
+            4326
+        );
+    };
+
+    Company.prototype.getLatitud = function() {
+        if (this.ubicacion) {
+            return sequelize.fn('ST_Y', this.ubicacion);
+        }
+        return null;
+    };
+
+    Company.prototype.getLongitud = function() {
+        if (this.ubicacion) {
+            return sequelize.fn('ST_X', this.ubicacion);
+        }
+        return null;
+    };
+
+    // Método estático para buscar compañías por proximidad
+    Company.findByProximity = function(lat, lng, radiusKm = 10) {
+        const punto = sequelize.fn('ST_SetSRID', 
+            sequelize.fn('ST_MakePoint', lng, lat), 
+            4326
+        );
+        
+        return this.findAll({
+            where: sequelize.where(
+                sequelize.fn('ST_DWithin', 
+                    sequelize.col('ubicacion'), 
+                    punto, 
+                    radiusKm / 111.32
+                ), 
+                true
+            ),
+            attributes: {
+                include: [
+                    [sequelize.fn('ST_Distance', 
+                        sequelize.col('ubicacion'), 
+                        punto
+                    ) * 111320, 'distancia_metros']
+                ]
+            },
+            order: [[sequelize.literal('distancia_metros'), 'ASC']]
+        });
+    };
+
+    // Método para obtener la dirección completa incluyendo barrio
     Company.prototype.getFullAddress = function () {
-        const parts = [this.address, this.city, this.state, this.country, this.postal_code];
+        const parts = [this.address, this.neighborhood, this.city, this.state, this.country, this.postal_code];
         return parts.filter(Boolean).join(', ');
     };
 

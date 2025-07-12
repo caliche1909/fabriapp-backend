@@ -135,11 +135,16 @@ module.exports = {
                     {
                         model: companies,
                         as: 'company',
-                        attributes: [
-                            'id', 'name', 'legal_name', 'tax_id', 'email', 'phone',
-                            'address', 'city', 'state', 'country', 'postal_code',
-                            'logo_url', 'website', 'is_active'
-                        ]
+                        attributes: {
+                            include: [
+                                'id', 'name', 'legal_name', 'tax_id', 'email', 'phone',
+                                'address', 'city', 'state', 'country', 'postal_code',
+                                'neighborhood', 'logo_url', 'logo_public_id', 'website', 'is_active',
+                                // Extraer coordenadas del campo PostGIS ubicacion
+                                [sequelize.fn('ST_Y', sequelize.col('company.ubicacion')), 'latitude'],
+                                [sequelize.fn('ST_X', sequelize.col('company.ubicacion')), 'longitude']
+                            ]
+                        }
                     },
                     {
                         model: roles,
@@ -191,20 +196,46 @@ module.exports = {
                 const companyId = userCompany.company.id;
                 const owner = ownersMap[companyId] || null;
 
+                // Procesar coordenadas PostGIS - pueden ser null si no hay ubicación
+                const latitude = userCompany.company.dataValues?.latitude
+                    ? parseFloat(userCompany.company.dataValues.latitude)
+                    : null;
+                const longitude = userCompany.company.dataValues?.longitude
+                    ? parseFloat(userCompany.company.dataValues.longitude)
+                    : null;
+
+                //obtener el codigo de pais
+                let countryCodeP = null;
+                let phoneP = null;
+
+                if (userCompany.company.phone !== null &&
+                    userCompany.company.phone !== undefined &&
+                    userCompany.company.phone !== '' &&
+                    userCompany.company.phone.includes('-')
+                ) {
+                    countryCodeP = userCompany.company.phone.split('-')[0];
+                    phoneP = userCompany.company.phone.split('-')[1];
+                }
+
                 return {
                     id: userCompany.company.id,
                     name: userCompany.company.name,
                     legalName: userCompany.company.legal_name,
                     taxId: userCompany.company.tax_id,
                     email: userCompany.company.email,
-                    phone: userCompany.company.phone,
+                    countryCode: countryCodeP,
+                    phone: phoneP,
                     address: userCompany.company.address,
                     city: userCompany.company.city,
                     state: userCompany.company.state,
                     country: userCompany.company.country,
                     postalCode: userCompany.company.postal_code,
+                    neighborhood: userCompany.company.neighborhood,
                     logoUrl: userCompany.company.logo_url,
+                    logoPublicId: userCompany.company.logo_public_id,
                     website: userCompany.company.website,
+                    latitude: latitude,
+                    longitude: longitude,
                     isActive: userCompany.company.is_active,
                     isDefault: userCompany.is_default,
                     userType: userCompany.user_type, // 'owner' o 'collaborator'  
@@ -543,16 +574,15 @@ module.exports = {
     // 📌 Crear un usuario
     async createUser(req, res) {
         let newUser = null;
+        let newUserCompany = null;
         let transaction = null;
         let plainPassword = null;
 
         try {
-            const { name, lastName, email, phone, role, requireGeolocation, companyId } = req.body;
-
-            console.log('👤 [UserController] Creando usuario:', { name, lastName, email, phone, role, requireGeolocation, companyId });
+            const { name, lastName, email, phone, roleId, requireGeolocation, companyId, allowAccess } = req.body;
 
             // 1. Validar que todos los campos requeridos estén presentes
-            if (!name || !lastName || !email || !phone || !role || !companyId) {
+            if (!name || !lastName || !email || !phone || !roleId || !companyId) {
                 return res.status(400).json({
                     success: false,
                     status: 400,
@@ -563,7 +593,6 @@ module.exports = {
             // 2. Verificar si el email ya existe (fuera de transacción)
             const existingUser = await users.findOne({ where: { email } });
             if (existingUser) {
-                console.log('👤 [UserController] Usuario existente encontrado:', existingUser.email);
 
                 // Verificar si ya tiene relación con esta empresa
                 const existingRelation = await user_companies.findOne({
@@ -601,15 +630,17 @@ module.exports = {
                         phone: existingUser.phone,
                         status: existingUser.status,
                         imageUrl: existingUser.image_url,
+
                     },
                     userDataToCreate: {
                         name,
                         lastName,
                         email,
                         phone,
-                        role,
+                        roleId,
                         requireGeolocation,
-                        companyId
+                        companyId,
+                        allowAccess,
                     }
                 });
             }
@@ -635,7 +666,7 @@ module.exports = {
             }
 
             // 5. Verificar que el rol existe
-            const roleData = await roles.findByPk(role);
+            const roleData = await roles.findByPk(roleId);
             if (!roleData) {
                 return res.status(404).json({
                     success: false,
@@ -646,7 +677,6 @@ module.exports = {
 
             // 6. Determinar el tipo de usuario basado en el rol
             const userType = (roleData.name === 'OWNER') ? 'owner' : 'collaborator';
-            console.log(`👤 [UserController] Rol asignado: ${roleData.name}, Tipo usuario: ${userType}`);
 
             // 7. Generar contraseña provisional
             const crypto = require('crypto');
@@ -667,19 +697,17 @@ module.exports = {
                     status: 'inactive' // Usuario inactivo hasta primer login
                 }, { transaction });
 
-                console.log('👤 [UserController] Usuario creado:', newUser.id);
 
                 // 8.2 Crear la relación user_companies
-                await user_companies.create({
+                newUserCompany = await user_companies.create({
                     user_id: newUser.id,
                     company_id: companyId,
-                    role_id: role,
+                    role_id: roleId,
                     user_type: userType,
                     is_default: true,
-                    status: 'inactive'
+                    status: allowAccess,
                 }, { transaction });
 
-                console.log('👤 [UserController] Relación user_companies creada');
 
                 const welcomeEmailData = {
                     email: newUser.email,
@@ -688,7 +716,7 @@ module.exports = {
                     password: plainPassword // Enviamos la contraseña sin hashear
                 };
 
-                console.log('📧 [UserController] Enviando email de bienvenida...');
+
                 const emailSent = await sendWelcomeEmail(welcomeEmailData);
 
                 if (!emailSent) {
@@ -703,7 +731,6 @@ module.exports = {
 
                 await transaction.commit();
 
-                console.log('✅ [UserController] Usuario creado exitosamente');
 
                 // 10. Respuesta exitosa
                 return res.status(201).json({
@@ -716,26 +743,31 @@ module.exports = {
                         email: newUser.email,
                         name: newUser.first_name,
                         lastName: newUser.last_name,
-                        phone: newUser.phone,
-                        status: newUser.status,
-                        userType: userType,
+                        countryCode: newUser.phone.split('-')[0],
+                        phone: newUser.phone.split('-')[1],
+                        imageUrl: newUser.image_url,
+                        imagePublicId: newUser.image_public_id,
+                        userStatus: newUser.status,
                         role: {
                             id: roleData.id,
                             name: roleData.name,
                             label: roleData.label
-                        }
+                        },
+                        allowAccess: newUserCompany.status,
+                        userType: newUserCompany.user_type,
+                        requireGeolocation: newUser.require_geolocation
                     }
                 });
 
             } catch (innerError) {
                 // Si algo falla durante la transacción, hacemos rollback
                 if (transaction) await transaction.rollback();
-                console.error('❌ [UserController] Error en transacción:', innerError);
+
                 throw innerError;
             }
 
         } catch (error) {
-            console.error("❌ [UserController] Error en createUser:", error);
+
 
             // Manejar diferentes tipos de errores
             let statusCode = 500;
@@ -776,7 +808,7 @@ module.exports = {
             const { userFound, userDataToCreate } = req.body;
 
             // 1. Validar que todos los campos requeridos estén presentes
-            if (!userFound || !userDataToCreate || !userFound.id || !userDataToCreate.companyId || !userDataToCreate.role) {
+            if (!userFound || !userDataToCreate || !userFound.id || !userDataToCreate.companyId || !userDataToCreate.roleId) {
                 return res.status(400).json({
                     success: false,
                     status: 400,
@@ -805,7 +837,7 @@ module.exports = {
             }
 
             // 4. Verificar que el rol existe
-            const roleData = await roles.findByPk(userDataToCreate.role);
+            const roleData = await roles.findByPk(userDataToCreate.roleId);
             if (!roleData) {
                 return res.status(404).json({
                     success: false,
@@ -814,7 +846,7 @@ module.exports = {
                 });
             }
 
-            // 5. Verificar que no existe ya una relación activa
+            // 5. Verificar que no exista una relación activa
             const existingRelation = await user_companies.findOne({
                 where: {
                     user_id: userFound.id,
@@ -832,8 +864,8 @@ module.exports = {
                 } else {
                     // Reactivar relación existente
                     await existingRelation.update({
-                        role_id: userDataToCreate.role,
-                        status: 'active',
+                        role_id: userDataToCreate.roleId,
+                        status: userDataToCreate.allowAccess,
                         user_type: (roleData.name === 'OWNER' || roleData.name === 'owner') ? 'owner' : 'collaborator'
                     });
 
@@ -846,14 +878,20 @@ module.exports = {
                             email: existingUser.email,
                             name: existingUser.first_name,
                             lastName: existingUser.last_name,
-                            phone: existingUser.phone,
-                            status: existingUser.status,
+                            countryCode: existingUser.phone.split('-')[0],
+                            phone: existingUser.phone.split('-')[1],
+                            imageUrl: existingUser.image_url,
+                            imagePublicId: existingUser.image_public_id,
+                            userStatus: existingUser.status,
                             userType: (roleData.name === 'OWNER') ? 'owner' : 'collaborator',
                             role: {
                                 id: roleData.id,
                                 name: roleData.name,
                                 label: roleData.label
-                            }
+                            },
+                            allowAccess: existingRelation.status,
+                            userType: existingRelation.user_type,
+                            requireGeolocation: existingUser.require_geolocation
                         }
                     });
                 }
@@ -875,18 +913,14 @@ module.exports = {
                 await user_companies.create({
                     user_id: existingUser.id,
                     company_id: userDataToCreate.companyId,
-                    role_id: userDataToCreate.role,
+                    role_id: userDataToCreate.roleId,
                     user_type: userType,
                     is_default: true, // No es empresa por defecto ya que el usuario ya existe
-                    status: 'active' // Usuario existente se activa inmediatamente
+                    status: userDataToCreate.allowAccess // Usuario existente se activa inmediatamente
                 }, { transaction });
-
-                console.log('👤 [UserController] Relación user_companies creada para usuario existente');
 
                 // 8.2 Confirmar la transacción
                 await transaction.commit();
-
-                console.log('✅ [UserController] Usuario existente asignado exitosamente');
 
                 // 9. Respuesta exitosa
                 return res.status(201).json({
@@ -912,17 +946,262 @@ module.exports = {
             } catch (innerError) {
                 // Si algo falla durante la transacción, hacemos rollback
                 if (transaction) await transaction.rollback();
-                console.error('❌ [UserController] Error en transacción:', innerError);
                 throw innerError;
             }
 
         } catch (error) {
-            console.error("❌ [UserController] Error en createExistingUser:", error);
 
             return res.status(500).json({
                 success: false,
                 status: 500,
                 message: 'Error interno del servidor al asignar usuario'
+            });
+        }
+    },
+
+    // 📌 Obtener usuarios por compañía
+    async getUsersByCompany(req, res) {
+        try {
+            const { company_id } = req.params;
+
+            // Validar parámetro obligatorio
+            if (!company_id) {
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: "No se reconoce a la compañía",
+                    users: []
+                });
+            }
+
+            // Obtener usuarios desde user_companies
+            const usersList = await user_companies.findAll({
+                where: {
+                    company_id: company_id
+                },
+                include: [
+                    {
+                        model: users,
+                        as: 'user',
+                        attributes: [
+                            "id",
+                            "email",
+                            "first_name",
+                            "last_name",
+                            "phone",
+                            "require_geolocation",
+                            "image_url",
+                            "image_public_id",
+                            "status"
+                        ]
+                    },
+                    {
+                        model: roles,
+                        as: 'role',
+                        attributes: ["id", "name", "label"]
+                    }
+                ]
+            });
+
+            // Formatear respuesta
+            const formattedUsers = usersList.map(userCompany => {
+                const user = userCompany.user;
+
+                // Procesar el teléfono para separar código de país y número
+                let countryCode = undefined;
+                let phoneNumber = undefined;
+
+                if (user.phone) {
+                    if (user.phone.includes('-')) {
+                        [countryCode, phoneNumber] = user.phone.split('-');
+                    } else {
+                        phoneNumber = user.phone;
+                    }
+                }
+
+                return {
+                    id: user.id,
+                    email: user.email,
+                    name: user.first_name,
+                    lastName: user.last_name,
+                    countryCode: countryCode,
+                    phone: phoneNumber,
+                    imageUrl: user.image_url,
+                    imagePublicId: user.image_public_id,
+                    userStatus: user.status,
+                    role: {
+                        id: userCompany.role.id,
+                        name: userCompany.role.name,
+                        label: userCompany.role.label
+                    },
+                    allowAccess: userCompany.status,
+                    userType: userCompany.user_type,
+                    requireGeolocation: user.require_geolocation
+                };
+            });
+
+            return res.status(200).json({
+                success: true,
+                status: 200,
+                message: "Usuarios obtenidos exitosamente",
+                users: formattedUsers
+            });
+
+        } catch (error) {
+            console.error("❌ Error al obtener usuarios:", error);
+            return res.status(500).json({
+                success: false,
+                status: 500,
+                message: "Error al obtener usuarios de la compañía",
+                users: []
+            });
+        }
+    },
+
+    // 📌 Actualizar usuarios de compañía
+    async updateUsersOfCompany(req, res) {
+        try {
+            const { id } = req.params;
+            const { name, lastName, phone, roleId, allowAccess, requireGeolocation, companyId } = req.body;
+
+            //1. Validar que todos los campos requeridos estén presentes
+            if (!name || !lastName || !phone || !roleId || !allowAccess || !companyId) {
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: "Faltan datos para actualizar el usuario"
+                });
+            }
+
+            //2. Buscar el usuario en la base de datos
+            const userInDB = await users.findByPk(id);
+            if (!userInDB) {
+                return res.status(404).json({
+                    success: false,
+                    status: 404,
+                    message: "Usuario no encontrado"
+                });
+            }
+
+            //3. Buscar la empresa en la base de datos
+            const companyInDB = await companies.findByPk(companyId);
+            if (!companyInDB) {
+                return res.status(404).json({
+                    success: false,
+                    status: 404,
+                    message: "Empresa no encontrada"
+                });
+            }
+
+            //4. Boscar la relacion de user_companies
+            const userCompanyInDB = await user_companies.findOne({
+                where: {
+                    user_id: id,
+                    company_id: companyId
+                }
+            });
+
+            if (!userCompanyInDB) {
+                return res.status(404).json({
+                    success: false,
+                    status: 404,
+                    message: "El usuario que intentas actualizar no esta asignado a esta compañía"
+                });
+            }
+
+            // 5. Buscar el rol en la base de datos
+            const roleInDB = await roles.findByPk(roleId);
+            if (!roleInDB) {
+                return res.status(404).json({
+                    success: false,
+                    status: 404,
+                    message: "El rol que intentas asignar no existe"
+                });
+            }
+
+            // 6. Iniciar transaccion (declarar fuera del try para acceso en catch)
+            let transaction = null;
+            transaction = await sequelize.transaction();
+
+            const userType = roleInDB.name === 'OWNER' ? 'owner' : 'collaborator';
+
+
+            try {
+                // 6. Actualizar los datos del usuario
+                const updatedUser = await userInDB.update({
+                    first_name: name,
+                    last_name: lastName,
+                    phone: phone,
+                    require_geolocation: requireGeolocation
+                }, { transaction });
+
+                // 7. Actualizar la relacion de user_companies
+                const updatedUserCompany = await userCompanyInDB.update({
+                    role_id: roleId,
+                    status: allowAccess,
+                    user_type: userType
+                }, { transaction });
+
+
+
+                if (!updatedUserCompany) {
+                    await transaction.rollback();
+                    return res.status(404).json({
+                        success: false,
+                        status: 404,
+                        message: "Error al actualizar el usuario, por favor intenta nuevamente"
+                    });
+                }
+
+                // 8. Confirmar la transaccion
+                await transaction.commit();
+
+                const countryCode = updatedUser.phone.split('-')[0];
+                const phoneNumber = updatedUser.phone.split('-')[1];
+
+                // Formatear la respuesta
+                const formattedUser = {
+                    id: updatedUser.id,
+                    email: updatedUser.email,
+                    name: updatedUser.first_name,
+                    lastName: updatedUser.last_name,
+                    countryCode: countryCode,
+                    phone: phoneNumber,
+                    imageUrl: updatedUser.image_url,
+                    imagePublicId: updatedUser.image_public_id,
+                    userStatus: updatedUser.status,
+                    role: {
+                        id: roleInDB.id,
+                        name: roleInDB.name,
+                        label: roleInDB.label
+                    },
+                    allowAccess: updatedUserCompany.status,
+                    userType: updatedUserCompany.user_type,
+                    requireGeolocation: updatedUser.require_geolocation
+                }
+
+                // 9. Respuesta exitosa
+                return res.status(200).json({
+                    success: true,
+                    status: 200,
+                    message: "Usuario actualizado exitosamente",
+                    user: formattedUser
+                });
+
+            } catch (innerError) {
+                await transaction.rollback();
+                console.error("❌ Error en transacción:", innerError);
+                throw innerError;
+            }
+
+        } catch (error) {
+            if (transaction) await transaction.rollback();
+
+            console.error("❌ Error al actualizar usuarios de la compañía:", error);
+            return res.status(500).json({
+                success: false,
+                status: 500,
+                message: "Error al actualizar usuario de la compañía",
             });
         }
     },
@@ -1393,6 +1672,8 @@ module.exports = {
                 message: "Error interno del servidor"
             });
         }
-    }
+    },
+
+
 };
 

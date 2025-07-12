@@ -26,8 +26,15 @@ const changeDefaultCompanyLimiter = createSmartRateLimit({
 router.put('/update_is_default_true/:id',
     verifyToken,                     // Verificar autenticación
     changeDefaultCompanyLimiter,     // Rate limiting específico (30 peticiones/15min por usuario)
-    checkPermission('edit_company_settings'), // Verificar permisos
+    checkPermission('update_company_settings'), // Verificar permisos
     companyController.updateIsDefaultTrue
+);
+
+// 📝 ACTUALIZAR DATOS DE UNA COMPAÑÍA
+router.put('/update/:id',
+    verifyToken,                     // Verificar autenticación
+    checkPermission('update_company_settings'), // Verificar permisos
+    companyController.updateCompanyById
 );
 
 module.exports = router;

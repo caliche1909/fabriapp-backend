@@ -42,6 +42,16 @@ const deleteImageLimiter = createGeneralLimiter({
     skipSuccessfulRequests: false  // Contar todas las eliminaciones
 });
 
+// Subir imagen de logo de empresa - Más restrictivo (menos frecuente)
+const uploadCompanyLogoImageLimiter = createImageUploadLimiter({
+    windowMs: 60 * 60 * 1000,      // 1 hora
+    maxByIP: 5,                   // 10 imágenes por hora por IP
+    maxByUser: 10,                 // 25 imágenes por hora por usuario
+    message: "Límite de subida de imágenes de logo de empresa alcanzado",
+    enableOwnerBonus: true,        // OWNERS: 37 imágenes/hora
+    skipSuccessfulRequests: true   // Solo contar uploads fallidos
+});
+
 // api/upload_images/
 
 // subir imagen de tienda
@@ -65,6 +75,21 @@ router.post('/profile',
     uploadProfileImageLimiter, // 🔒 25 imágenes/hora (menos frecuente)
     upload.single('image'), 
     image_uploadController.uploadProfileImage
+);
+
+// subir imagen de logo de empresa
+router.post('/company_logo', 
+    verifyToken, 
+    uploadCompanyLogoImageLimiter, // 🔒 10 imágenes/hora (menos frecuente)
+    upload.single('image'), 
+    image_uploadController.uploadCompanyLogoImage
+);
+
+// eliminar imagen de logo de empresa
+router.delete('/company_logo', 
+    verifyToken, 
+    deleteImageLimiter, // 🔒 100 eliminaciones/15min (operación menos costosa)
+    image_uploadController.deleteCompanyLogoImage
 );
 
 module.exports = router;

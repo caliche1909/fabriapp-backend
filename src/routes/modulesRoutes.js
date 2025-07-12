@@ -6,7 +6,7 @@ const modulesController = require('../controllers/modules_controller');
 const {
     createSmartRateLimit
 } = require('../middlewares/smartRateLimit.middleware');
-const { verifyToken } = require('../middlewares/jwt.middleware');
+const { verifyToken, checkPermission } = require('../middlewares/jwt.middleware');
 
 // 🛡️ CONFIGURAR LIMITADOR ESPECÍFICO PARA CONSULTAS DE MÓDULOS
 // Se consulta para cargar en UserPermissions.tsx cuando se crean roles
@@ -27,6 +27,7 @@ const modulesQueryLimiter = createSmartRateLimit({
  */
 router.get('/',
     verifyToken,
+    checkPermission('view_company_settings'),
     modulesQueryLimiter,             // 20 consultas/15min (se cachea en componente)
     modulesController.getModulesWithPermissions
 );
