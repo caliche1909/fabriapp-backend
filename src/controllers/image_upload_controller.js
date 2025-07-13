@@ -7,6 +7,113 @@ const { notifyAdmin } = require('../utils/emailNotifier');
 
 module.exports = {
 
+    // Método para eliminar una imagen de perfil de usuario
+    async deleteProfileImage(req, res) {
+        const { userId, publicId } = req.body;
+
+        try {
+            // ✅ PASO 1: Validaciones iniciales
+            if (!userId || !publicId) {
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: 'Datos incompletos para realizar la operación'
+                });
+            }
+
+            // ✅ PASO 2: Verificar que el usuario existe
+            const userInDb = await users.findByPk(userId);
+            if (!userInDb) {
+                return res.status(401).json({
+                    success: false,
+                    status: 401,
+                    message: 'Usuario no autorizado'
+                });
+            }
+
+
+            // ✅ PASO 3: Validar que publicId esté presente
+            if (!publicId || publicId.trim() === '') {
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: 'Falta la llave de eliminacion de la imagen'
+                });
+            }
+
+            // ✅ PASO 4: validar que el id que llega es el mismo que el del usuario en el req.user
+            if (userId !== req.user?.id) {
+                return res.status(403).json({
+                    success: false,
+                    status: 403,
+                    message: 'Acceso denegado para eliminar la imagen de este usuario'
+                });
+            }
+
+            // ✅ PASO 5: Iniciar transacción
+            const transaction = await sequelize.transaction();
+
+            try {
+                // ✅ PASO 6: Actualizar BD PRIMERO (con transacción pendiente)
+                await userInDb.update({
+                    image_public_id: null,
+                    image_url: null
+                }, { transaction });
+
+                // ✅ PASO 7: Eliminar de Cloudinary DESPUÉS
+                const deleteResult = await cloudinary.uploader.destroy(publicId);
+
+
+                // ✅ PASO 8: Evaluar resultado de Cloudinary
+                if (deleteResult.result === 'ok') {
+                    // Imagen eliminada exitosamente de Cloudinary
+                    await transaction.commit();
+                    return res.status(200).json({
+                        success: true,
+                        status: 200,
+                        message: 'Imagen de perfil eliminada exitosamente',
+                        imageUrl: null,
+                        imagePublicId: null
+                    });
+                } else if (deleteResult.result === 'not found') {
+                    // Imagen no existía en Cloudinary (está bien, BD ya se actualizó)
+                    await transaction.commit();
+                    return res.status(200).json({
+                        success: true,
+                        status: 200,
+                        message: 'Imagen de perfil eliminada exitosamente',
+                        imageUrl: null,
+                        imagePublicId: null
+                    });
+                } else {
+                    // Error desconocido en Cloudinary - revertir BD
+                    await transaction.rollback();
+                    return res.status(500).json({
+                        success: false,
+                        status: 500,
+                        message: 'Error al eliminar la imagen, por favor intente más tarde'
+                    });
+                }
+
+            } catch (innerError) {
+                await transaction.rollback();
+                return res.status(500).json({
+                    success: false,
+                    status: 500,
+                    message: 'Error al eliminar la imagen, por favor intente más tarde'
+                });
+            }
+        } catch (error) {
+            console.error('❌ Error general en deleteProfileImage:', error);
+            return res.status(500).json({
+                success: false,
+                status: 500,
+                message: 'Error interno del servidor al eliminar imagen de perfil',
+                details: process.env.NODE_ENV === 'development' ? error.message : null
+            });
+        }
+    },
+
     // Método para eliminar un logo de empresa
     async deleteCompanyLogoImage(req, res) {
         const { companyId, publicId } = req.body;
@@ -120,11 +227,11 @@ module.exports = {
                     });
                 }
 
-            } catch (error) {
+            } catch (innerError) {
                 // Error en BD o Cloudinary - revertir BD
                 await transaction.rollback();
 
-                if (error.message && error.message.includes('Invalid image public ID')) {
+                if (innerError.message && innerError.message.includes('Invalid image public ID')) {
                     return res.status(400).json({
                         success: false,
                         status: 400,

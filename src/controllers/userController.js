@@ -149,7 +149,7 @@ module.exports = {
                     {
                         model: roles,
                         as: 'role',
-                        attributes: ['id', 'name'],
+                        attributes: ['id', 'name', 'label', 'description', 'is_global', 'is_active'],
                         include: [
                             {
                                 model: permissions,
@@ -241,8 +241,11 @@ module.exports = {
                     userType: userCompany.user_type, // 'owner' o 'collaborator'  
                     role: {
                         id: userCompany.role.id,
-                        name: userCompany.role ? userCompany.role.name : 'COLLABORATOR',
+                        name: userCompany.role ? userCompany.role.name : null,
+                        label: userCompany.role ? userCompany.role.label : null,
                         description: userCompany.role ? userCompany.role.description : '',
+                        isGlobal: userCompany.role ? userCompany.role.is_global : false,
+                        isActive: userCompany.role ? userCompany.role.is_active : false,
                         permissions: userCompany.role && userCompany.role.permissions
                             ? userCompany.role.permissions.map(permission => ({
                                 name: permission.name,
@@ -998,7 +1001,7 @@ module.exports = {
                     {
                         model: roles,
                         as: 'role',
-                        attributes: ["id", "name", "label"]
+                        attributes: ["id", "name", "label", "description", "is_global", "is_active"]
                     }
                 ]
             });
@@ -1032,7 +1035,10 @@ module.exports = {
                     role: {
                         id: userCompany.role.id,
                         name: userCompany.role.name,
-                        label: userCompany.role.label
+                        label: userCompany.role.label,
+                        description: userCompany.role.description,
+                        isGlobal: userCompany.role.is_global,
+                        isActive: userCompany.role.is_active
                     },
                     allowAccess: userCompany.status,
                     userType: userCompany.user_type,
@@ -1060,9 +1066,17 @@ module.exports = {
 
     // 📌 Actualizar usuarios de compañía
     async updateUsersOfCompany(req, res) {
+
+        let changedRole = false;
+        let newPermissionsList = [];
+        let transaction = null; // ✅ Declarar al inicio para que esté disponible en todos los catch
+
         try {
             const { id } = req.params;
             const { name, lastName, phone, roleId, allowAccess, requireGeolocation, companyId } = req.body;
+
+            console.log("👤 [UserController] Datos del usuario que se esta actualizando:", req.body);
+            console.log("👤 [UserController] Datos del usuario que esta operando:", req.user);
 
             //1. Validar que todos los campos requeridos estén presentes
             if (!name || !lastName || !phone || !roleId || !allowAccess || !companyId) {
@@ -1070,6 +1084,15 @@ module.exports = {
                     success: false,
                     status: 400,
                     message: "Faltan datos para actualizar el usuario"
+                });
+            }
+
+            //1.1 VALIDAR: El usuario operador debe pertenecer a la misma empresa
+            if (req.user.companyId !== companyId) {
+                return res.status(403).json({
+                    success: false,
+                    status: 403,
+                    message: "No tienes permisos para actualizar usuarios de esta empresa"
                 });
             }
 
@@ -1081,6 +1104,22 @@ module.exports = {
                     status: 404,
                     message: "Usuario no encontrado"
                 });
+            }
+
+            //si el telefono que llega es diferente del telefono del usuario en la base de datos, debemos validar que no este en uso por otro usuario
+            if (phone !== userInDB.phone) {
+                const phoneExists = await users.findOne({
+                    where: { phone: phone }
+                });
+
+                if (phoneExists) {
+                    return res.status(400).json({
+                        success: false,
+                        status: 400,
+                        message: "El teléfono que intentas asignar ya está en uso por otro usuario"
+                    });
+                }
+
             }
 
             //3. Buscar la empresa en la base de datos
@@ -1101,6 +1140,7 @@ module.exports = {
                 }
             });
 
+
             if (!userCompanyInDB) {
                 return res.status(404).json({
                     success: false,
@@ -1109,8 +1149,70 @@ module.exports = {
                 });
             }
 
-            // 5. Buscar el rol en la base de datos
-            const roleInDB = await roles.findByPk(roleId);
+            // 🔑 CAPTURAR EL ROL ANTERIOR para comparar después
+            const previousRoleId = userCompanyInDB.role_id;
+
+            //4.1 evitar que un usuario que no es dueño de la compañía actualice a otro usuario dueño de la compañía
+            if (userCompanyInDB.user_type === 'owner' && req.user.userType !== 'owner') {
+                return res.status(403).json({
+                    success: false,
+                    status: 403,
+                    message: "No tienes permisos necesarios para realizar esta acción 4.1"
+                });
+            }
+
+            //4.2 Si el usuario que se esta actualizando es owner, no se debe actualizar el rol
+            if (userCompanyInDB.user_type === 'owner' && roleId !== previousRoleId) {
+                return res.status(403).json({
+                    success: false,
+                    status: 403,
+                    message: "No tienes permisos necesarios para realizar esta acción 4.2"
+                });
+            }
+
+            //4.3 Si el usuario que se esta actualizando es owner, no se debe actulizar el allowAccess como inactive
+            if (userCompanyInDB.user_type === 'owner' && allowAccess === 'inactive') {
+                return res.status(403).json({
+                    success: false,
+                    status: 403,
+                    message: "No puedes desactivar el acceso del dueño de la compañía 4.3"
+                });
+            }
+
+            
+            // 5. Determinar si necesitamos cargar permisos (solo si el usuario se edita a sí mismo)
+            const isUpdatingOwnProfile = (id === req.user.id);
+            const isRoleChanging = (roleId !== previousRoleId);
+            
+            console.log("🔍 [UserController] Análisis de permisos:", {
+                isUpdatingOwnProfile,
+                isRoleChanging,
+                shouldLoadPermissions: isUpdatingOwnProfile && isRoleChanging
+            });
+
+            // 5.1. Buscar el rol con permisos SOLO si el usuario se está editando a sí mismo Y está cambiando el rol
+            const roleInclude = (isUpdatingOwnProfile && isRoleChanging) ? [
+                {
+                    model: permissions,
+                    as: 'permissions',
+                    through: { attributes: [] },
+                    attributes: ['id', 'name', 'code', 'description', 'is_active']
+                }
+            ] : [];
+
+            const roleInDB = await roles.findByPk(roleId, {
+                attributes: ['id', 'name', 'is_global', 'description', 'label', 'is_active'],
+                include: roleInclude
+            });
+
+            if(req.user.userType !== 'owner' && roleInDB.name === 'OWNER') {
+                return res.status(403).json({
+                    success: false,
+                    status: 403,
+                    message: "No tienes permisos necesarios para realizar esta acción"
+                });
+            }
+
             if (!roleInDB) {
                 return res.status(404).json({
                     success: false,
@@ -1119,14 +1221,12 @@ module.exports = {
                 });
             }
 
-            // 6. Iniciar transaccion (declarar fuera del try para acceso en catch)
-            let transaction = null;
-            transaction = await sequelize.transaction();
-
+            // 6. Preparar datos para la transacción
             const userType = roleInDB.name === 'OWNER' ? 'owner' : 'collaborator';
 
-
             try {
+                // 6.1. Iniciar transaccion
+                transaction = await sequelize.transaction();
                 // 6. Actualizar los datos del usuario
                 const updatedUser = await userInDB.update({
                     first_name: name,
@@ -1159,7 +1259,42 @@ module.exports = {
                 const countryCode = updatedUser.phone.split('-')[0];
                 const phoneNumber = updatedUser.phone.split('-')[1];
 
-                // Formatear la respuesta
+                                // 10. Formatear la respuesta según el caso
+                const shouldIncludePermissions = (isUpdatingOwnProfile && isRoleChanging);
+                
+                console.log("🎯 [UserController] Decisión de permisos:", {
+                    isUpdatingOwnProfile,
+                    isRoleChanging,
+                    shouldIncludePermissions,
+                    hasPermissions: roleInDB.permissions ? roleInDB.permissions.length : 0
+                });
+
+                const roleResponse = shouldIncludePermissions ? {
+                    // 🔑 ROL CON PERMISOS (usuario editando su propio rol)
+                    id: roleInDB.id,
+                    name: roleInDB.name,
+                    label: roleInDB.label,
+                    description: roleInDB.description,
+                    isGlobal: roleInDB.is_global,
+                    isActive: roleInDB.is_active,
+                    permissions: (roleInDB.permissions && Array.isArray(roleInDB.permissions)) 
+                        ? roleInDB.permissions.map(permission => ({                            
+                            name: permission.name,
+                            code: permission.code,
+                            description: permission.description || '',
+                            isActive: permission.is_active
+                        }))
+                        : []
+                } : {
+                    // 📋 ROL SIN PERMISOS (usuario editando a otro usuario)
+                    id: roleInDB.id,
+                    name: roleInDB.name,
+                    label: roleInDB.label,
+                    description: roleInDB.description,
+                    isGlobal: roleInDB.is_global,
+                    isActive: roleInDB.is_active
+                };
+
                 const formattedUser = {
                     id: updatedUser.id,
                     email: updatedUser.email,
@@ -1170,23 +1305,55 @@ module.exports = {
                     imageUrl: updatedUser.image_url,
                     imagePublicId: updatedUser.image_public_id,
                     userStatus: updatedUser.status,
-                    role: {
-                        id: roleInDB.id,
-                        name: roleInDB.name,
-                        label: roleInDB.label
-                    },
+                    role: roleResponse,
                     allowAccess: updatedUserCompany.status,
                     userType: updatedUserCompany.user_type,
                     requireGeolocation: updatedUser.require_geolocation
                 }
 
-                // 9. Respuesta exitosa
-                return res.status(200).json({
+                // 9. Generar nuevo token SOLO si el usuario cambió su propio rol
+                let newToken = null;
+
+                if (isUpdatingOwnProfile && isRoleChanging) {
+                    // Regenerar token con el nuevo rol
+                    const jwt = require('jsonwebtoken');
+                    const SECRET_KEY = process.env.JWT_SECRET;
+                    
+                    newToken = jwt.sign({
+                        userId: id,
+                        email: req.user.email,
+                        companyId: companyId,
+                        roleId: roleId,
+                        userType: userType
+                    }, SECRET_KEY, { expiresIn: '8h' });
+                    
+                    console.log("🔑 [UserController] Token regenerado para usuario que cambió su propio rol");
+                }
+
+                // 9. Debug: Verificar estructura de permisos
+                console.log("👤 [UserController] FORMATED USER:", JSON.stringify(formattedUser, null, 2));
+
+                // 11. Respuesta exitosa con información específica
+                const responseData = {
                     success: true,
                     status: 200,
                     message: "Usuario actualizado exitosamente",
                     user: formattedUser
-                });
+                };
+
+                // Incluir campos adicionales solo cuando corresponde
+                if (isUpdatingOwnProfile && isRoleChanging) {
+                    responseData.newToken = newToken;
+                    responseData.changedRole = true;
+                    console.log("🔑 [UserController] Respuesta completa: token + permisos + changedRole");
+                } else if (isRoleChanging) {
+                    responseData.changedRole = true;
+                    console.log("📋 [UserController] Respuesta básica: solo changedRole");
+                } else {
+                    console.log("✏️ [UserController] Respuesta normal: solo actualización de datos");
+                }
+
+                return res.status(200).json(responseData);
 
             } catch (innerError) {
                 await transaction.rollback();

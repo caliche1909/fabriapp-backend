@@ -92,4 +92,11 @@ router.delete('/company_logo',
     image_uploadController.deleteCompanyLogoImage
 );
 
+// eliminar imagen de perfil de usuario
+router.delete('/profile', 
+    verifyToken, 
+    deleteImageLimiter, // 🔒 100 eliminaciones/15min (operación menos costosa)
+    image_uploadController.deleteProfileImage
+);
+
 module.exports = router;
