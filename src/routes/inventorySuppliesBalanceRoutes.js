@@ -28,7 +28,7 @@ const stockBalancesLimiter = createSmartRateLimit({
 router.get('/list/:company_id',
     verifyToken,
     stockBalancesLimiter,            // 75 consultas/15min (monitoreo frecuente)
-    checkPermission('view-supplies-stock'), // permiso en la base de datos para ver los balances de inventario de insumos
+    checkPermission('view_supplies_stock'), // permiso en la base de datos para ver los balances de inventario de insumos
     inventory_supplies_balanceController.getListInventorySuppliesBalance
 );
 

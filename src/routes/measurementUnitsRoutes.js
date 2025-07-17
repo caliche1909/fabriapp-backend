@@ -27,8 +27,7 @@ const measurementUnitsLimiter = createSmartRateLimit({
 // Para formularios de creación/edición de productos e insumos
 router.get('/',
     verifyToken,
-    measurementUnitsLimiter,         // 100 consultas/15min (catálogo de referencia)
-    checkPermission('view_company_settings'),
+    measurementUnitsLimiter,        
     measurement_unitsController.list
 );
 

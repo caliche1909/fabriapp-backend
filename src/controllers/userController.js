@@ -1,4 +1,4 @@
-const { users, roles, permissions, companies, user_companies, user_current_position, sequelize } = require('../models');
+const { users, roles, permissions, companies, user_companies, user_current_position, sequelize, modules, submodules } = require('../models');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { Op } = require('sequelize');
@@ -154,8 +154,22 @@ module.exports = {
                             {
                                 model: permissions,
                                 as: 'permissions',
-                                through: { attributes: [] }, // Excluir campos de la tabla intermedia
-                                attributes: ['name', 'code', 'description', 'is_active']
+                                through: { attributes: [] },
+                                attributes: ['id', 'name', 'code', 'description', 'is_active'],
+                                include: [
+                                    {
+                                        model: submodules,
+                                        as: 'submodule',
+                                        attributes: ['id', 'name', 'code', 'description', 'route_path', 'is_active'],
+                                        include: [
+                                            {
+                                                model: modules,
+                                                as: 'module',
+                                                attributes: ['id', 'name', 'code', 'description', 'route_path', 'is_active']
+                                            }
+                                        ]
+                                    }
+                                ]
                             }
                         ]
                     }
@@ -217,6 +231,64 @@ module.exports = {
                     phoneP = userCompany.company.phone.split('-')[1];
                 }
 
+                // 🔥 NUEVA FUNCIÓN: Organizar permisos por módulos y submódulos
+                const organizePermissionsByModules = (permissions) => {
+                    if (!permissions || permissions.length === 0) return [];
+
+                    // Crear un mapa para organizar por módulos
+                    const modulesMap = new Map();
+
+                    permissions.forEach(permission => {
+                        if (!permission.submodule || !permission.submodule.module) return;
+
+                        const module = permission.submodule.module;
+                        const submodule = permission.submodule;
+
+                        // Crear estructura del módulo si no existe
+                        if (!modulesMap.has(module.id)) {
+                            modulesMap.set(module.id, {
+                                id: module.id,
+                                name: module.name,
+                                code: module.code,
+                                description: module.description,
+                                routePath: module.route_path,
+                                isActive: module.is_active,
+                                submodules: new Map()
+                            });
+                        }
+
+                        const moduleData = modulesMap.get(module.id);
+
+                        // Crear estructura del submódulo si no existe
+                        if (!moduleData.submodules.has(submodule.id)) {
+                            moduleData.submodules.set(submodule.id, {
+                                id: submodule.id,
+                                name: submodule.name,
+                                code: submodule.code,
+                                description: submodule.description,
+                                routePath: submodule.route_path,
+                                isActive: submodule.is_active,
+                                permissions: []
+                            });
+                        }
+
+                        // Agregar el permiso al submódulo
+                        moduleData.submodules.get(submodule.id).permissions.push({
+                            id: permission.id,
+                            name: permission.name,
+                            code: permission.code,
+                            description: permission.description,
+                            isActive: permission.is_active
+                        });
+                    });
+
+                    // Convertir los Maps a arrays
+                    return Array.from(modulesMap.values()).map(module => ({
+                        ...module,
+                        submodules: Array.from(module.submodules.values())
+                    }));
+                };
+
                 return {
                     id: userCompany.company.id,
                     name: userCompany.company.name,
@@ -247,12 +319,7 @@ module.exports = {
                         isGlobal: userCompany.role ? userCompany.role.is_global : false,
                         isActive: userCompany.role ? userCompany.role.is_active : false,
                         permissions: userCompany.role && userCompany.role.permissions
-                            ? userCompany.role.permissions.map(permission => ({
-                                name: permission.name,
-                                code: permission.code,
-                                description: permission.description,
-                                isActive: permission.is_active
-                            }))
+                            ? organizePermissionsByModules(userCompany.role.permissions)
                             : []
                     },
                     ownerId: owner ? owner.id : null,

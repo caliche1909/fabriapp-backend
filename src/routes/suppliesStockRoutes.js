@@ -35,14 +35,14 @@ const viewStockMovementsLimiter = createQueryLimiter({
 router.post('/registerMovement', 
     verifyToken, 
     registerStockMovementLimiter, // 🔒 80 movimientos/15min (operativo frecuente)
-    checkPermission('update-supplies-stock'), 
+    checkPermission('update_supplies_stock'), 
     supplies_stockController.insertSuppliesStock
 );
 
 router.get('/movements/:supplyId', 
     verifyToken, 
     viewStockMovementsLimiter, // 🔒 120 consultas/15min (auditoría/reportes)
-    checkPermission('view-movements-supplies-stock'), 
+    checkPermission('view_movements_supplies_stock'), 
     supplies_stockController.getSuppliesStockBySupplyId
 );
 

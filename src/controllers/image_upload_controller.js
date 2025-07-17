@@ -170,7 +170,7 @@ module.exports = {
                 return res.status(403).json({
                     success: false,
                     status: 403,
-                    message: 'Solo el propietario puede eliminar el logo de la compañia'
+                    message: 'Solo el propietario puede eliminar el logo de la compañía'
                 });
             }
 

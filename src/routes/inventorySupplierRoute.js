@@ -80,7 +80,7 @@ router.get('/list/:company_id',
 router.post('/create',
     verifyToken,
     createSupplyLimiter,             // 20 creaciones/hora (considerando tiempo de operación)
-    checkPermission('create-supply'), // permiso en la base de datos para crear un insumo
+    checkPermission('create_supply'), // permiso en la base de datos para crear un insumo
     inventory_suppliesController.createInventorySupply
 );
 
@@ -88,7 +88,7 @@ router.post('/create',
 router.put('/update/:id',
     verifyToken,
     updateSupplyLimiter,             // 60 actualizaciones/15min (operación rápida)
-    checkPermission('update-supply'), // permiso en la base de datos para actualizar un insumo
+    checkPermission('update_supply'), // permiso en la base de datos para actualizar un insumo
     inventory_suppliesController.updateInventorySupply
 );
 
@@ -96,7 +96,7 @@ router.put('/update/:id',
 router.delete('/delete/:id',
     verifyToken,
     deleteSupplyLimiter,             // 15 eliminaciones/hora (operación crítica y lenta)
-    checkPermission('delete-supply'), // permiso en la base de datos para eliminar un insumo
+    checkPermission('delete_supply'), // permiso en la base de datos para eliminar un insumo
     inventory_suppliesController.deleteInventorySupply
 );
 

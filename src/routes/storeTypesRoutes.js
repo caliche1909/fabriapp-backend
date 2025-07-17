@@ -16,7 +16,7 @@ const storeTypesCatalogLimiter = createStoreTypesCatalogLimiter();
 router.get('/list', 
     verifyToken, 
     storeTypesCatalogLimiter, // 🔒 75 consultas/15min (se guarda en Redux)
-    checkPermission('view_stores_management'), 
+    //checkPermission('view_stores_management'), 
     store_typesController.getStoreTypes
 );
 

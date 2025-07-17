@@ -29,28 +29,28 @@ const deleteRouteLimiter = createDeleteRouteLimiter();
 router.get('/list/:company_id',
     verifyToken,
     listRoutesByCompanyLimiter, // 🔒 40 consultas/15min (se guarda en Redux)
-    checkPermission('view-routes-by-company'), // permiso en la base de datos para ver las rutas por compañía
+    checkPermission('view_routes_by_company'), // permiso en la base de datos para ver las rutas por compañía
     routesController.getListRoutes
 );
 
 router.post('/create/:company_id',
     verifyToken,
     createRouteLimiter, // 🔒 10 rutas/hora (operación deliberada de configuración)
-    checkPermission('create-route-by-company'), // permiso en la base de datos para ver las rutas por compañía
+    checkPermission('create_route_by_company'), // permiso en la base de datos para ver las rutas por compañía
     routesController.createRoute
 );
 
 router.put('/update/:id',
     verifyToken,
     updateRouteLimiter, // 🔒 30 actualizaciones/15min (ajustes de rutas existentes)
-    checkPermission('update-route-by-company'),
+    checkPermission('update_route_by_company'),
     routesController.updateRoute
 );
 
 router.delete('/delete/:id',
     verifyToken,
     deleteRouteLimiter, // 🔒 5 eliminaciones/hora (operación crítica, afecta logística)
-    checkPermission('delete-route-by-company'),
+    checkPermission('delete_route_by_company'),
     routesController.deleteRoute
 );
 

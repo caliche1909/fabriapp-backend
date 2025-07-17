@@ -23,42 +23,42 @@ const deleteStoreLimiter = createGeneralLimiter({
 router.post('/create/:company_id',
     verifyToken,
     createStoreCreationLimiter(),
-    checkPermission('create-store'), // permiso para crear una tienda
+    checkPermission('create_store'), // permiso para crear una tienda
     storesController.createStore
 );
 
 router.put('/update/:id',
     verifyToken,
     createGeneralLimiter(),
-    checkPermission('update-store'), // permiso para actualizar una tienda
+    checkPermission('update_store'), // permiso para actualizar una tienda
     storesController.updateStore
 );
 
 router.get('/getStoresByRoute/:route_id',
     verifyToken,
     createQueryLimiter(),
-    checkPermission('view-stores'), // permiso para ver las tiendas 
+    checkPermission('view_stores'), // permiso para ver las tiendas 
     storesController.getStoresbyRoute
 );
 
 router.get('/orphans/:company_id',
     verifyToken,
     createQueryLimiter(),
-    checkPermission('view-stores'), // permiso para ver las tiendas huérfanas
+    checkPermission('view_stores'), // permiso para ver las tiendas huérfanas
     storesController.getOrphanStores
 );
 
 router.delete('/delete/:id',
     verifyToken,
     deleteStoreLimiter,
-    checkPermission('delete-store'), // permiso para eliminar una tienda
+    checkPermission('delete_store'), // permiso para eliminar una tienda
     storesController.deleteStore
 );
 
 router.put('/assignStoreToRoute/:storeId',
     verifyToken,
     createGeneralLimiter(),
-    checkPermission('store-to-route'), // permiso para asignar una tienda a una ruta
+    checkPermission('store_to_route'), // permiso para asignar una tienda a una ruta
     storesController.assignStoreToRoute
 );
 

@@ -68,14 +68,14 @@ router.post('/login',
 // 🔥 ENDPOINTS PROTEGIDOS CON RATE LIMITING MODERADO  
 router.post('/create-user',
     verifyToken,
-    checkPermission('create-user'),
+    checkPermission('create_user'),
     userCreationLimiter, // 🔒 20 usuarios/hora (configuración)
     userController.createUser
 );
 
 router.post('/create-existing-user',
     verifyToken,
-    checkPermission('create-user'),
+    checkPermission('create_user'),
     userCreationLimiter, // 🔒 20 usuarios/hora (misma operación)
     userController.createExistingUser
 );
@@ -83,7 +83,7 @@ router.post('/create-existing-user',
 // 🔄 ENDPOINTS DE ACTUALIZACIÓN CON LÍMITES ESPECÍFICOS
 router.put('/update-user-profile/:id',
     verifyToken,
-    checkAnyPermission(['update-personal-user']),
+    checkAnyPermission(['update_personal_user']),
     updateUserLimiter, // 🔒 100 actualizaciones/15min (operación común)
     userController.update
 );
@@ -91,7 +91,7 @@ router.put('/update-user-profile/:id',
 // 🔄 ACTUALIZAR USUARIOS DE COMPAÑIA
 router.put('/update-users-of-company/:id',
     verifyToken,
-    //checkPermission('update-users'),
+    checkPermission('update_users'),
     updateUserLimiter, // 🔒 100 actualizaciones/15min (operación común)
     userController.updateUsersOfCompany
 );
@@ -112,7 +112,7 @@ router.get('/getSellers/:company_id',
 // Obtener usuarios por compañía
 router.get('/company/:company_id',
     verifyToken,
-    checkPermission('view-users'),
+    checkPermission('view_users'),
     getSellersLimiter, // Reutilizamos el mismo limitador
     userController.getUsersByCompany
 );

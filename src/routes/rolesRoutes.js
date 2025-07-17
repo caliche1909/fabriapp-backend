@@ -53,7 +53,7 @@ router.get('/company/:companyId',
  */
 router.post('/create/company/:companyId',
     verifyToken,
-    checkPermission('create-rol'),
+    checkPermission('create_rol'),
     rolesQueryLimiterToCreate,  // 10 consultas/10min
     rolesController.createCompanyRole
 );
@@ -76,7 +76,7 @@ router.get('/:roleId/permissions',
  */
 router.put('/:roleId',
     verifyToken,
-    checkPermission('update-rol'),   // Permisos para actualizar un rol
+    checkPermission('update_rol'),   // Permisos para actualizar un rol
     rolesQueryLimiterToCreate,       // 10 consultas/10min
     rolesController.updateCompanyRole
 );
@@ -88,7 +88,7 @@ router.put('/:roleId',
  */
 router.delete('/:roleId',
     verifyToken,
-    checkPermission('delete-rol'),   // Permisos para eliminar un rol
+    checkPermission('delete_rol'),   // Permisos para eliminar un rol
     rolesController.deleteCompanyRole
 );
 

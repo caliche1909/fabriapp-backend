@@ -70,8 +70,7 @@ module.exports = {
                 latitude,
                 longitude
             } = req.body;
-
-            console.log(`📝 Intentando actualizar compañía ${id}...`);
+            
 
             // Verificar que la compañía existe
             const company = await companies.findByPk(id);
