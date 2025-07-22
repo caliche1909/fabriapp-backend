@@ -27,7 +27,7 @@ const modulesQueryLimiter = createSmartRateLimit({
  */
 router.get('/',
     verifyToken,
-    //checkPermission('view_company_settings'),
+    checkPermission('view_module_system'),
     modulesQueryLimiter,             // 20 consultas/15min (se cachea en componente)
     modulesController.getModulesWithPermissions
 );

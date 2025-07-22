@@ -1,4 +1,81 @@
-const { routes, users } = require('../models');
+const { routes, users, user_companies, roles } = require('../models');
+
+// 🎯 Función helper para formatear datos del vendedor de forma consistente
+const formatSellerData = (seller, assignment) => {
+    if (!seller) return null;
+
+    // Procesar el teléfono para separar código de país y número
+    let countryCode = undefined;
+    let phoneNumber = undefined;
+
+    if (seller.phone) {
+        if (seller.phone.includes('-')) {
+            [countryCode, phoneNumber] = seller.phone.split('-');
+        } else {
+            phoneNumber = seller.phone;
+        }
+    }
+
+    return {
+        id: seller.id,
+        email: seller.email,
+        name: seller.first_name,
+        lastName: seller.last_name,
+        countryCode: countryCode,
+        phone: phoneNumber,
+        imageUrl: seller.image_url,
+        imagePublicId: seller.image_public_id,
+        userStatus: seller.status,
+        role: assignment && assignment.role ? {
+            id: assignment.role.id,
+            name: assignment.role.name,
+            label: assignment.role.label,
+            description: assignment.role.description,
+            isGlobal: assignment.role.is_global,
+            isActive: assignment.role.is_active
+        } : null,
+        allowAccess: assignment ? assignment.status : null,
+        userType: assignment ? assignment.user_type : null,
+        requireGeolocation: seller.require_geolocation || false
+    };
+};
+
+// 🎯 Función helper para obtener datos del vendedor con su rol
+const getSellerWithRole = async (userId, companyId) => {
+    if (!userId) return null;
+
+    const sellerData = await users.findByPk(userId, {
+        attributes: ['id', 'first_name', 'last_name', 'email', 'phone', 'status', 'image_url', 'image_public_id', 'require_geolocation'],
+        include: [
+            {
+                model: user_companies,
+                as: 'company_assignments',
+                where: {
+                    company_id: companyId,
+                    status: 'active'
+                },
+                attributes: ['user_type', 'status'],
+                include: [
+                    {
+                        model: roles,
+                        as: 'role',
+                        attributes: ['id', 'name', 'label', 'description', 'is_global', 'is_active']
+                    }
+                ],
+                required: false
+            }
+        ],
+        required: false
+    });
+
+    if (!sellerData) return null;
+
+    const assignment = sellerData.company_assignments && sellerData.company_assignments.length > 0
+        ? sellerData.company_assignments[0]
+        : null;
+
+    return formatSellerData(sellerData, assignment);
+};
 
 module.exports = {
     // 📌 Método para obtener todas las rutas de una compañía
@@ -18,41 +95,71 @@ module.exports = {
                 });
             }
 
-            // 🔹 Obtener rutas filtradas por company_id
+            // 🔹 Obtener rutas filtradas por company_id con información optimizada del vendedor
             const routesList = await routes.findAll({
                 where: {
-                    company_id: company_id // 🎯 FILTRO POR COMPAÑÍA
+                    company_id: company_id
                 },
-                attributes: ['id', 'name', 'working_days'],
+                attributes: ['id', 'name', 'working_days', 'user_id'],
                 include: [
                     {
                         model: users,
                         as: 'seller',
-                        attributes: ['id', 'first_name', 'last_name', 'email', 'phone', 'status']
+                        attributes: ['id', 'first_name', 'last_name', 'email', 'phone', 'status', 'image_url', 'image_public_id', 'require_geolocation'],
+                        include: [
+                            {
+                                model: user_companies,
+                                as: 'company_assignments',
+                                where: {
+                                    company_id: company_id,
+                                    status: 'active'
+                                },
+                                attributes: ['user_type', 'status'],
+                                include: [
+                                    {
+                                        model: roles,
+                                        as: 'role',
+                                        attributes: ['id', 'name', 'label', 'description', 'is_global', 'is_active']
+                                    }
+                                ],
+                                required: false
+                            }
+                        ],
+                        required: false
                     }
                 ],
-                order: [['created_at', 'DESC']] // Ordenar por fecha de creación
+                order: [['created_at', 'DESC']]
             });
 
-            // 🔹 Formatear respuesta según la interfaz TypeScript
-            const formattedRoutes = routesList.map(route => ({
-                id: route.id,
-                name: route.name,
-                working_days: route.working_days, // Array de DayOfWeek
-                seller: route.seller ? {
-                    id: route.seller.id,
-                    email: route.seller.email,
-                    name: route.seller.first_name,
-                    lastName: route.seller.last_name,
-                    contryCode: route.seller.phone?.split('-')[0] || '',
-                    phone: route.seller.phone?.split('-')[1] || route.seller.phone || '',
-                    status: route.seller.status
-                } : null,
-                stores: []
-            }));
+            // 🔹 Si no hay rutas, devolver lista vacía
+            if (!routesList.length) {
+                return res.status(200).json({
+                    success: true,
+                    status: 200,
+                    message: "No hay rutas creadas para esta compañía aún",
+                    routes: []
+                });
+            }
+
+            // 📋 Formatear los datos de las rutas para el frontend
+            const formattedRoutes = routesList.map(route => {
+                const assignment = route.seller && route.seller.company_assignments && route.seller.company_assignments.length > 0
+                    ? route.seller.company_assignments[0]
+                    : null;
+
+                return {
+                    id: route.id,
+                    name: route.name,
+                    seller: route.seller ? formatSellerData(route.seller, assignment) : null,
+                    working_days: route.working_days || []
+                    // ✅ NO incluimos stores según tu especificación
+                };
+            });
+
 
             res.status(200).json({
                 success: true,
+                status: 200,
                 message: "Rutas obtenidas exitosamente",
                 routes: formattedRoutes
             });
@@ -62,22 +169,22 @@ module.exports = {
             res.status(500).json({
                 success: false,
                 status: 500,
-                message: "Error al obtener rutas de la compañía",
+                message: "Error interno del servidor",
                 routes: []
             });
         }
     },
 
-    // 📌 Método para crear una ruta
+    // 📌 Método para crear una nueva ruta
     async createRoute(req, res) {
         console.log("📌 Intentando crear una nueva ruta...", req.body);
 
         try {
-            const { name, user_id, working_days } = req.body;
             const { company_id } = req.params;
+            const { name, user_id, working_days } = req.body;
 
-            // 🔹 Validar datos obligatorios
-            if (!name || !company_id) {
+            // 🔹 Validaciones básicas
+            if (!name) {
                 return res.status(400).json({
                     success: false,
                     status: 400,
@@ -89,23 +196,7 @@ module.exports = {
                 return res.status(400).json({
                     success: false,
                     status: 400,
-                    message: "No se reconoce a la compañía"
-                });
-            }
-
-            // 🔹 Verificar si la ruta ya existe en la misma compañía
-            const routeExists = await routes.findOne({
-                where: {
-                    name,
-                    company_id
-                }
-            });
-
-            if (routeExists) {
-                return res.status(400).json({
-                    success: false,
-                    status: 400,
-                    message: "La ruta que intenta crear YA EXISTE!"
+                    message: "ID de compañía es requerido"
                 });
             }
 
@@ -114,60 +205,28 @@ module.exports = {
                 name,
                 company_id,
                 user_id: user_id || null,
-                working_days: working_days || null
+                working_days: working_days || []
             });
 
-            // 🔹 Si se asignó un vendedor, obtener sus datos completos
-            let sellerData = null;
-            if (user_id) {
-                const routeWithSeller = await routes.findByPk(newRoute.id, {
-                    include: [
-                        {
-                            model: users,
-                            as: 'seller',
-                            attributes: ['id', 'first_name', 'last_name', 'email', 'phone', 'status']
-                        }
-                    ]
-                });
+            // 🔹 Obtener los datos del vendedor si existe
+            const sellerData = await getSellerWithRole(user_id, company_id);
 
-                if (routeWithSeller && routeWithSeller.seller) {
-                    // Procesar el teléfono para separar código de país y número
-                    let countryCode = undefined;
-                    let phoneNumber = undefined;
+            // 🔹 Formatear respuesta para el frontend
+            const formattedRoute = {
+                id: newRoute.id,
+                name: newRoute.name,
+                seller: sellerData,
+                working_days: newRoute.working_days || [],
+                stores: []
+            };
 
-                    if (routeWithSeller.seller.phone) {
-                        if (routeWithSeller.seller.phone.includes('-')) {
-                            [countryCode, phoneNumber] = routeWithSeller.seller.phone.split('-');
-                        } else {
-                            phoneNumber = routeWithSeller.seller.phone;
-                        }
-                    }
-
-                    sellerData = {
-                        id: routeWithSeller.seller.id,
-                        email: routeWithSeller.seller.email,
-                        name: routeWithSeller.seller.first_name,
-                        lastName: routeWithSeller.seller.last_name,
-                        countryCode: countryCode,
-                        phone: phoneNumber,
-                        status: routeWithSeller.seller.status,
-                    };
-                }
-            }
-
-            console.log("✅ Ruta creada:", newRoute);
+            console.log("✅ Ruta creada exitosamente:", formattedRoute);
 
             res.status(201).json({
                 success: true,
                 status: 201,
                 message: "Ruta creada exitosamente",
-                route: {
-                    id: newRoute.id,
-                    name: newRoute.name,
-                    working_days: newRoute.working_days,
-                    seller: sellerData,
-                    stores: []
-                }
+                route: formattedRoute
             });
 
         } catch (error) {
@@ -175,10 +234,11 @@ module.exports = {
             res.status(500).json({
                 success: false,
                 status: 500,
-                message: "Error al crear la ruta"
+                message: "Error interno del servidor"
             });
         }
     },
+
     // 📌 Método para actualizar una ruta
     async updateRoute(req, res) {
         console.log("📌 Intentando actualizar una ruta...", req.body);
@@ -195,6 +255,7 @@ module.exports = {
                 });
             }
 
+            // 🔹 Buscar la ruta a actualizar
             const route = await routes.findByPk(id);
 
             if (!route) {
@@ -207,66 +268,30 @@ module.exports = {
 
             // 🔹 Actualizar los campos
             route.name = name || route.name;
-            route.user_id = user_id !== undefined ? user_id : route.user_id; // Permitir null explícito
+            route.user_id = user_id !== undefined ? user_id : route.user_id;
             route.working_days = working_days || route.working_days;
 
             await route.save();
 
-            // 🔹 Si hay vendedor asignado, obtener sus datos completos
-            let sellerData = null;
-            if (route.user_id) {
-                const routeWithSeller = await routes.findByPk(route.id, {
-                    include: [
-                        {
-                            model: users,
-                            as: 'seller',
-                            attributes: ['id', 'first_name', 'last_name', 'email', 'phone', 'status']
-                        }
-                    ]
-                });
+            // 🔹 Obtener los datos del vendedor actualizados si existe
+            const sellerData = await getSellerWithRole(route.user_id, route.company_id);
 
-                if (routeWithSeller && routeWithSeller.seller) {
-                    // Procesar el teléfono para separar código de país y número
-                    let countryCode = undefined;
-                    let phoneNumber = undefined;
+            // 🔹 Formatear respuesta para el frontend
+            const formattedRoute = {
+                id: route.id,
+                name: route.name,
+                seller: sellerData,
+                working_days: route.working_days || []
+                // ✅ NO incluimos stores
+            };
 
-                    if (routeWithSeller.seller.phone) {
-                        if (routeWithSeller.seller.phone.includes('-')) {
-                            [countryCode, phoneNumber] = routeWithSeller.seller.phone.split('-');
-                        } else {
-                            phoneNumber = routeWithSeller.seller.phone;
-                        }
-                    }
-
-                    sellerData = {
-                        id: routeWithSeller.seller.id,
-                        email: routeWithSeller.seller.email,
-                        name: routeWithSeller.seller.first_name,
-                        lastName: routeWithSeller.seller.last_name,
-                        countryCode: countryCode,
-                        phone: phoneNumber,
-                        status: routeWithSeller.seller.status,
-                        role: {
-                            id: routeWithSeller.seller.role.id,
-                            name: routeWithSeller.seller.role.name
-                        }
-                    };
-                }
-            }
-
-            console.log("✅ Ruta actualizada:", route);
+            console.log("✅ Ruta actualizada exitosamente:", formattedRoute);
 
             res.status(200).json({
                 success: true,
                 status: 200,
                 message: "Ruta actualizada exitosamente",
-                route: {
-                    id: route.id,
-                    name: route.name,
-                    working_days: route.working_days,
-                    seller: sellerData,
-                    
-                }
+                route: formattedRoute
             });
 
         } catch (error) {
@@ -274,7 +299,7 @@ module.exports = {
             res.status(500).json({
                 success: false,
                 status: 500,
-                message: "Error al actualizar la ruta"
+                message: "Error interno del servidor"
             });
         }
     },
@@ -297,7 +322,7 @@ module.exports = {
             }
 
             await route.destroy();
-           
+
             res.status(200).json({
                 success: true,
                 status: 200,
@@ -313,6 +338,6 @@ module.exports = {
         }
     },
 
-  
+
 };
 

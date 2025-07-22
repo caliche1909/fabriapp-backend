@@ -61,7 +61,7 @@ const getSellersLimiter = createQueryLimiter({
 
 // 🔥 ENDPOINTS CRÍTICOS CON RATE LIMITING ESTRICTO
 router.post('/login',
-    loginLimiter, // 🔒 5 intentos/15min (crítico de seguridad)
+    //loginLimiter, // 🔒 5 intentos/15min (crítico de seguridad)
     userController.login
 );
 

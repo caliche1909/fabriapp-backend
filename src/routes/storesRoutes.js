@@ -1,6 +1,6 @@
 const express = require('express');
 const { storesController } = require('../controllers');
-const { verifyToken, checkPermission } = require('../middlewares/jwt.middleware');
+const { verifyToken, checkPermission, checkAnyPermission } = require('../middlewares/jwt.middleware');
 
 // 🛡️ IMPORTAR RATE LIMITING PARA TIENDAS
 const {
@@ -23,7 +23,7 @@ const deleteStoreLimiter = createGeneralLimiter({
 router.post('/create/:company_id',
     verifyToken,
     createStoreCreationLimiter(),
-    checkPermission('create_store'), // permiso para crear una tienda
+    checkAnyPermission(['create_store', 'create_store_in_route']), // permiso para crear una tienda
     storesController.createStore
 );
 
@@ -37,7 +37,7 @@ router.put('/update/:id',
 router.get('/getStoresByRoute/:route_id',
     verifyToken,
     createQueryLimiter(),
-    checkPermission('view_stores'), // permiso para ver las tiendas 
+    checkPermission('view_stores_in_route'), // permiso para ver las tiendas 
     storesController.getStoresbyRoute
 );
 
@@ -58,7 +58,7 @@ router.delete('/delete/:id',
 router.put('/assignStoreToRoute/:storeId',
     verifyToken,
     createGeneralLimiter(),
-    checkPermission('store_to_route'), // permiso para asignar una tienda a una ruta
+    checkAnyPermission(['store_to_route', 'change_store_route']), // permiso para asignar una tienda a una ruta
     storesController.assignStoreToRoute
 );
 
