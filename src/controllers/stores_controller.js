@@ -1,4 +1,4 @@
-const { stores, users, store_images, roles } = require('../models');
+const { stores, users, store_visits, roles } = require('../models');
 const bcrypt = require('bcrypt');
 
 const SALT_ROUNDS = 10;
@@ -14,7 +14,7 @@ module.exports = {
             // 🔸 PASO 1: Extraer company_id de los parámetros y datos del request body
             const { company_id } = req.params;
             const { store, user } = req.body;
-           
+
 
             // 🔸 PASO 2: Validar que company_id esté presente en la URL
             if (!company_id) {
@@ -195,7 +195,8 @@ module.exports = {
                     'closing_time',
                     'city',
                     'state',
-                    'country'
+                    'country',
+                    'current_visit_status'
                 ],
                 include: [
                     {
@@ -540,7 +541,8 @@ module.exports = {
                     'closing_time',
                     'city',
                     'state',
-                    'country'
+                    'country',
+                    'current_visit_status'
                 ],
                 include: [
                     {
@@ -685,6 +687,7 @@ module.exports = {
                     'city',
                     'state',
                     'country',
+                    'current_visit_status'
                 ],
                 include: [
                     {
@@ -802,7 +805,8 @@ module.exports = {
                     'opening_time',
                     'closing_time',
                     'city', 'state',
-                    'country'
+                    'country',
+                    'current_visit_status'
                 ],
                 include: [
                     {
@@ -962,6 +966,7 @@ module.exports = {
                     'city',
                     'state',
                     'country',
+                    'current_visit_status'
                 ],
                 include: [
                     {
@@ -1026,6 +1031,168 @@ module.exports = {
                 success: false,
                 status: 500,
                 message: "Ups! Algo paso asignando la tienda a la ruta."
+            });
+        }
+    },
+
+    // 📌 Método para actualizar una tienda como visitada
+    async updateStoreAsVisited(req, res) {
+        let route_id = null;
+        let transaction = null;
+        try {
+            const { store_id } = req.params;
+            const { date, distance } = req.body;
+            const user_id = req.user.id;
+
+            // 🔍 VALIDAR DATOS REQUERIDOS ANTES DE INICIAR TRANSACCIÓN
+            if (!store_id) {
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: 'El identificador de la tienda es requerido'
+                });
+            }
+
+            if (!date || !distance) {
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: 'La fecha y distancia de la visita son requeridas'
+                });
+            }
+
+            // Validar que la distancia sea un número válido
+            const parsedDistance = parseFloat(distance);
+            if (isNaN(parsedDistance) || parsedDistance < 0) {
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: 'La distancia debe ser un número válido mayor o igual a 0'
+                });
+            }
+
+            // Validar que la fecha sea válida
+            const visitDate = new Date(date);
+            if (isNaN(visitDate.getTime())) {
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: 'La fecha proporcionada no es válida'
+                });
+            }
+
+            // Buscar la tienda
+            const store = await stores.findByPk(parseInt(store_id));
+            if (!store) {
+                return res.status(404).json({
+                    success: false,
+                    status: 404,
+                    message: 'Tienda no encontrada'
+                });
+            }
+
+            route_id = store.route_id;
+
+            // Comenzamos la transacción
+            transaction = await stores.sequelize.transaction();
+
+            // 🔍 Obtener información completa para desnormalización
+            const fullStore = await stores.findByPk(store.id, {
+                include: [
+                    { model: users, as: 'manager', attributes: ['first_name', 'last_name'] },
+                    { model: stores.sequelize.models.routes, as: 'route', attributes: ['name'] }
+                ],
+                transaction
+            });
+
+            const currentUser = await users.findByPk(user_id, {
+                attributes: ['first_name', 'last_name'],
+                transaction
+            });
+
+            // Actualizar el estado de visita de la tienda
+            store.current_visit_status = 'visited';
+            await store.save({ transaction });
+
+            // 📦 Registrar la visita con información desnormalizada para análisis histórico
+            const visitRecord = await store_visits.create({
+                user_id,
+                store_id: store.id,
+                route_id,
+                date: visitDate, // Usar la fecha ya validada
+                distance: parsedDistance, // Usar la distancia ya validada        
+                user_name: currentUser ? `${currentUser.first_name} ${currentUser.last_name}`.trim() : null,
+                store_name: fullStore.name,
+                store_address: fullStore.address,
+                route_name: fullStore.route ? fullStore.route.name : null,
+                sale_amount: 0.00 // Por defecto, se puede actualizar luego cuando se registre una venta
+            }, { transaction });
+
+
+            // Confirmar la transacción
+            await transaction.commit();
+
+            res.status(200).json({
+                success: true,
+                status: 200,
+                message: 'Estado de visita actualizado exitosamente',
+                store_visit_id: visitRecord.id
+            });
+
+        } catch (error) {
+
+
+            // Si hay un error, revertir la transacción
+            if (transaction) {
+                await transaction.rollback();
+            }
+
+            res.status(500).json({
+                success: false,
+                message: 'Error interno del servidor al actualizar el estado de visita',
+                error: process.env.NODE_ENV === 'development' ? error.message : undefined
+            });
+        }
+    },
+
+    // 📌 Método para resetear todas las tiendas de una ruta a 'pending'
+    async resetRouteVisits(req, res) {
+        try {
+            const { route_id } = req.params;
+
+            if (!route_id || isNaN(parseInt(route_id))) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'ID de ruta inválido'
+                });
+            }
+
+            // Actualizar todas las tiendas de la ruta a 'pending'
+            const [updatedRows] = await stores.update(
+                { current_visit_status: 'pending' },
+                {
+                    where: { route_id: parseInt(route_id) },
+                    returning: false
+                }
+            );
+
+            console.log(`✅ Reseteo de ruta completado - Ruta ID: ${route_id}, Tiendas reseteadas: ${updatedRows}`);
+
+            res.status(200).json({
+                success: true,
+                message: `Se resetearon ${updatedRows} tiendas de la ruta ${route_id} a estado 'pending'`,
+                data: {
+                    route_id: parseInt(route_id),
+                    stores_reset: updatedRows
+                }
+            });
+
+        } catch (error) {
+            console.error('❌ Error al resetear visitas de ruta:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error interno del servidor al resetear las visitas',
+                error: process.env.NODE_ENV === 'development' ? error.message : undefined
             });
         }
     }

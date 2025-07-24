@@ -106,6 +106,17 @@ module.exports = function (sequelize, DataTypes) {
       type: DataTypes.STRING(100),
       allowNull: true
     },
+    current_visit_status: {
+      type: DataTypes.STRING(20),
+      allowNull: false,
+      defaultValue: 'pending',
+      validate: {
+        isIn: {
+          args: [['pending', 'visited']],
+          msg: "El estado de visita debe ser 'pending' o 'visited'"
+        }
+      }
+    },
     created_at: {
       type: DataTypes.DATE,
       allowNull: false,
@@ -236,6 +247,24 @@ module.exports = function (sequelize, DataTypes) {
       order: [[sequelize.literal('distancia_metros'), 'ASC']]
     });
   };
+
+  // Método para resetear todas las tiendas de una ruta a 'pending'
+  Stores.resetRouteVisits = async function(routeId) {
+    try {
+      const result = await sequelize.query(
+        'SELECT reset_route_visits($1) as result',
+        {
+          bind: [routeId],
+          type: sequelize.QueryTypes.SELECT,
+          raw: true
+        }
+      );
+      return result[0].result;
+    } catch (error) {
+      console.error('Error al resetear visitas de ruta:', error);
+      throw error;
+    }
+  }; 
 
   Stores.associate = (models) => {
     Stores.belongsTo(models.companies, {

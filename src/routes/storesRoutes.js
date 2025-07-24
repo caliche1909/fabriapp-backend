@@ -6,7 +6,7 @@ const { verifyToken, checkPermission, checkAnyPermission } = require('../middlew
 const {
     createStoreCreationLimiter,
     createGeneralLimiter,
-    createQueryLimiter,  
+    createQueryLimiter,
 } = require('../middlewares/smartRateLimit.middleware');
 
 const router = express.Router();
@@ -60,6 +60,20 @@ router.put('/assignStoreToRoute/:storeId',
     createGeneralLimiter(),
     checkAnyPermission(['store_to_route', 'change_store_route']), // permiso para asignar una tienda a una ruta
     storesController.assignStoreToRoute
+);
+
+// 📌 Ruta para actualizar el estado de visita de una tienda
+router.put('/update-store-as-visited/:store_id',
+    verifyToken,
+    createGeneralLimiter(),
+    storesController.updateStoreAsVisited
+);
+
+// 📌 Ruta para resetear todas las tiendas de una ruta a 'pending'
+router.put('/routes/:route_id/reset-visits',
+    verifyToken,
+    createGeneralLimiter(),
+    storesController.resetRouteVisits
 );
 
 module.exports = router;

@@ -72,12 +72,23 @@ web_modules/
 # Yarn Integrity file
 .yarn-integrity
 
-# dotenv environment variable files
+# dotenv environment variable files (NUNCA SUBIR - CONTIENEN CREDENCIALES)
 .env
 .env.development.local
 .env.test.local
 .env.production.local
 .env.local
+.env.*
+
+# Database backups (NUNCA SUBIR - CONTIENEN DATOS SENSIBLES)
+../backup_database/
+*.sql
+*backup*.sql
+temp_backup_modified.sql
+*temp*.sql
+
+# Database config con credenciales
+src/config/config.json
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache
@@ -128,6 +139,3 @@ dist
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
-
-
-#no subir archivos .md
