@@ -1,4 +1,5 @@
 const { stores, users, store_visits, roles } = require('../models');
+const { Op } = require('sequelize'); // ✅ Importar Op de Sequelize
 const bcrypt = require('bcrypt');
 
 const SALT_ROUNDS = 10;
@@ -366,7 +367,7 @@ module.exports = {
                     where: {
                         address: address,
                         company_id: store.company_id,
-                        id: { [stores.sequelize.Op.ne]: id } // Excluir la tienda actual
+                        id: { [Op.ne]: id } // ✅ Excluir la tienda actual
                     },
                     transaction
                 });

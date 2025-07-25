@@ -72,6 +72,7 @@ router.put('/update-store-as-visited/:store_id',
 // 📌 Ruta para resetear todas las tiendas de una ruta a 'pending'
 router.put('/routes/:route_id/reset-visits',
     verifyToken,
+    checkPermission('reset_route'),
     createGeneralLimiter(),
     storesController.resetRouteVisits
 );

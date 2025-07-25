@@ -1908,6 +1908,128 @@ module.exports = {
         }
     },
 
+    // 🌍 ACTUALIZAR UBICACIÓN DEL USUARIO
+    async updateUserLocation(req, res) {
+        try {
+            const { userId } = req.params;
+            const { latitude, longitude, accuracy, timestamp } = req.body;
+
+            // Validar parámetros obligatorios
+            if (!userId) {
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: "ID de usuario requerido"
+                });
+            }
+
+            if (latitude === undefined || longitude === undefined) {
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: "Latitud y longitud son requeridas"
+                });
+            }
+
+            // Validar rangos de coordenadas
+            if (latitude < -90 || latitude > 90) {
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: "Latitud debe estar entre -90 y 90"
+                });
+            }
+
+            if (longitude < -180 || longitude > 180) {
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: "Longitud debe estar entre -180 y 180"
+                });
+            }
+
+            // Verificar que el usuario existe
+            const user = await users.findByPk(userId);
+            if (!user) {
+                return res.status(404).json({
+                    success: false,
+                    status: 404,
+                    message: "Usuario no encontrado"
+                });
+            }
+
+            // Verificar que el usuario requiere geolocalización
+            if (!user.requireGeolocation) {
+                return res.status(403).json({
+                    success: false,
+                    status: 403,
+                    message: "Usuario no requiere seguimiento de ubicación"
+                });
+            }
+
+            // Buscar o crear registro de ubicación actual
+            let [userPosition, created] = await user_current_position.findOrCreate({
+                where: { userId: userId },
+                defaults: {
+                    userId: userId,
+                    latitude: parseFloat(latitude),
+                    longitude: parseFloat(longitude),
+                    accuracy: accuracy ? parseFloat(accuracy) : 999999.99,
+                    updatedAt: timestamp ? new Date(timestamp) : new Date()
+                }
+            });
+
+            // Si no se creó (ya existía), actualizarlo
+            if (!created) {
+                await userPosition.update({
+                    latitude: parseFloat(latitude),
+                    longitude: parseFloat(longitude),
+                    accuracy: accuracy ? parseFloat(accuracy) : 999999.99,
+                    updatedAt: timestamp ? new Date(timestamp) : new Date()
+                });
+            }
+
+            console.log(`📍 Ubicación actualizada para usuario ${userId}:`, {
+                lat: parseFloat(latitude).toFixed(6),
+                lng: parseFloat(longitude).toFixed(6),
+                accuracy: accuracy ? `${accuracy}m` : 'unknown',
+                method: created ? 'created' : 'updated'
+            });
+
+            return res.status(200).json({
+                success: true,
+                status: 200,
+                message: "Ubicación actualizada exitosamente",
+                data: {
+                    userId: userId,
+                    latitude: parseFloat(latitude),
+                    longitude: parseFloat(longitude),
+                    accuracy: accuracy ? parseFloat(accuracy) : 999999.99,
+                    timestamp: timestamp ? new Date(timestamp) : new Date(),
+                    created: created
+                }
+            });
+
+        } catch (error) {
+            console.error("❌ Error actualizando ubicación del usuario:", error);
+            
+            // Log detallado para debugging
+            console.error("Detalles del error:", {
+                userId: req.params?.userId,
+                body: req.body,
+                error: error.message,
+                stack: error.stack
+            });
+
+            return res.status(500).json({
+                success: false,
+                status: 500,
+                message: "Error interno del servidor",
+                details: process.env.NODE_ENV === 'development' ? error.message : undefined
+            });
+        }
+    },
+
 
 };
 
