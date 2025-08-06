@@ -1,87 +1,7 @@
 const { users, user_current_position, companies, user_companies } = require('../models');
 const { Op } = require('sequelize');
 
-/**
- * Activar geolocalización para un usuario
- */
-const enableUserGeolocation = async (req, res) => {
-    try {
-        const { userId } = req.params;
 
-        // Verificar que el usuario existe
-        const user = await users.findByPk(userId);
-        if (!user) {
-            return res.status(404).json({
-                success: false,
-                status: 404,
-                message: 'Usuario no encontrado'
-            });
-        }
-
-        // Activar geolocalización (el trigger automáticamente creará el registro en user_current_position)
-        await user.enableGeolocation();
-
-        res.status(200).json({
-            success: true,
-            status: 200,
-            message: 'Geolocalización activada exitosamente',
-            user: {
-                id: user.id,
-                name: user.getFullName(),
-                require_geolocation: user.require_geolocation
-            }
-        });
-
-    } catch (error) {
-        console.error('❌ Error al activar geolocalización:', error);
-        res.status(500).json({
-            success: false,
-            status: 500,
-            message: 'Error interno del servidor'
-        });
-    }
-};
-
-/**
- * Desactivar geolocalización para un usuario
- */
-const disableUserGeolocation = async (req, res) => {
-    try {
-        const { userId } = req.params;
-
-        // Verificar que el usuario existe
-        const user = await users.findByPk(userId);
-        if (!user) {
-            return res.status(404).json({
-                success: false,
-                status: 404,
-                message: 'Usuario no encontrado'
-            });
-        }
-
-        // Desactivar geolocalización (el trigger automáticamente eliminará el registro)
-        await user.disableGeolocation();
-
-        res.status(200).json({
-            success: true,
-            status: 200,
-            message: 'Geolocalización desactivada exitosamente',
-            user: {
-                id: user.id,
-                name: user.getFullName(),
-                require_geolocation: user.require_geolocation
-            }
-        });
-
-    } catch (error) {
-        console.error('❌ Error al desactivar geolocalización:', error);
-        res.status(500).json({
-            success: false,
-            status: 500,
-            message: 'Error interno del servidor'
-        });
-    }
-};
 
 /**
  * Actualizar posición de un usuario
@@ -253,7 +173,7 @@ const getCompanyActivePositions = async (req, res) => {
             .map(uc => {
                 const user = uc.user;
                 const position = user.current_position;
-                
+
                 return {
                     user_id: user.id,
                     name: user.getFullName(),
@@ -302,7 +222,7 @@ const findNearbyUsers = async (req, res) => {
         // Validar coordenadas
         const lat = parseFloat(latitude);
         const lng = parseFloat(longitude);
-        
+
         if (isNaN(lat) || isNaN(lng)) {
             return res.status(400).json({
                 success: false,
@@ -316,13 +236,13 @@ const findNearbyUsers = async (req, res) => {
 
         // Si se especifica companyId, filtrar solo usuarios de esa empresa
         let filteredUsers = nearbyUsers;
-        
+
         if (companyId) {
             const companyUserIds = await user_companies.findAll({
                 where: { company_id: companyId },
                 attributes: ['user_id']
             });
-            
+
             const companyUserIdSet = new Set(companyUserIds.map(uc => uc.user_id));
             filteredUsers = nearbyUsers.filter(user => companyUserIdSet.has(user.user_id));
         }
@@ -402,15 +322,15 @@ const getGeolocationStats = async (req, res) => {
         });
 
         const totalUsers = companyUsers.length;
-        const usersWithGeolocationEnabled = companyUsers.filter(uc => 
+        const usersWithGeolocationEnabled = companyUsers.filter(uc =>
             uc.user && uc.user.require_geolocation
         ).length;
-        
-        const activePositions = companyUsers.filter(uc => 
+
+        const activePositions = companyUsers.filter(uc =>
             uc.user && uc.user.current_position && uc.user.current_position.is_active
         ).length;
 
-        const recentPositions = companyUsers.filter(uc => 
+        const recentPositions = companyUsers.filter(uc =>
             uc.user && uc.user.current_position && uc.user.current_position.isRecent(10)
         ).length;
 
@@ -442,9 +362,7 @@ const getGeolocationStats = async (req, res) => {
     }
 };
 
-module.exports = {
-    enableUserGeolocation,
-    disableUserGeolocation,
+module.exports = {    
     updateUserPosition,
     getUserPosition,
     getCompanyActivePositions,

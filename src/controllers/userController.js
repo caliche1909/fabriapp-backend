@@ -1131,6 +1131,76 @@ module.exports = {
         }
     },
 
+    // 📌 Obtener usuarios con geolocalización de una compañía (para mapa en tiempo real)
+    async getUsersWithGeolocation(req, res) {
+        try {
+            const { company_id } = req.params;
+
+            // Validar parámetro obligatorio
+            if (!company_id) {
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: "No se reconoce a la compañía",
+                    users: []
+                });
+            }
+
+            // Obtener usuarios con geolocalización activa
+            const usersList = await user_companies.findAll({
+                where: {
+                    company_id: company_id,
+                    status: 'active' // Solo usuarios activos en la empresa
+                },
+                include: [
+                    {
+                        model: users,
+                        as: 'user',
+                        where: {
+                            require_geolocation: true, // Solo usuarios que requieren geolocalización
+                            status: 'active' // Solo usuarios activos
+                        },
+                        attributes: [
+                            "id",
+                            "first_name",
+                            "last_name",
+                            "image_url"
+                        ]
+                    }
+                ]
+            });
+
+            // Formatear respuesta específica para el mapa
+            const formattedUsers = usersList.map(userCompany => {
+                const user = userCompany.user;
+
+                return {
+                    id: user.id,
+                    name: `${user.first_name} ${user.last_name}`,
+                    imageUrl: user.image_url,
+                    location: null, // Se actualizará via WebSocket
+                    lastLocationUpdate: null // Se actualizará via WebSocket
+                };
+            });
+
+            return res.status(200).json({
+                success: true,
+                status: 200,
+                message: "Usuarios con geolocalización obtenidos exitosamente",
+                users: formattedUsers
+            });
+
+        } catch (error) {
+            console.error("❌ Error al obtener usuarios con geolocalización:", error);
+            return res.status(500).json({
+                success: false,
+                status: 500,
+                message: "Error al obtener usuarios con geolocalización",
+                users: []
+            });
+        }
+    },
+
     // 📌 Actualizar usuarios de compañía
     async updateUsersOfCompany(req, res) {
 
@@ -1246,16 +1316,11 @@ module.exports = {
                 });
             }
 
-            
+
             // 5. Determinar si necesitamos cargar permisos (solo si el usuario se edita a sí mismo)
             const isUpdatingOwnProfile = (id === req.user.id);
             const isRoleChanging = (roleId !== previousRoleId);
-            
-            console.log("🔍 [UserController] Análisis de permisos:", {
-                isUpdatingOwnProfile,
-                isRoleChanging,
-                shouldLoadPermissions: isUpdatingOwnProfile && isRoleChanging
-            });
+
 
             // 5.1. Buscar el rol con permisos SOLO si el usuario se está editando a sí mismo Y está cambiando el rol
             const roleInclude = (isUpdatingOwnProfile && isRoleChanging) ? [
@@ -1272,7 +1337,7 @@ module.exports = {
                 include: roleInclude
             });
 
-            if(req.user.userType !== 'owner' && roleInDB.name === 'OWNER') {
+            if (req.user.userType !== 'owner' && roleInDB.name === 'OWNER') {
                 return res.status(403).json({
                     success: false,
                     status: 403,
@@ -1326,15 +1391,9 @@ module.exports = {
                 const countryCode = updatedUser.phone.split('-')[0];
                 const phoneNumber = updatedUser.phone.split('-')[1];
 
-                                // 10. Formatear la respuesta según el caso
+                // 10. Formatear la respuesta según el caso
                 const shouldIncludePermissions = (isUpdatingOwnProfile && isRoleChanging);
-                
-                console.log("🎯 [UserController] Decisión de permisos:", {
-                    isUpdatingOwnProfile,
-                    isRoleChanging,
-                    shouldIncludePermissions,
-                    hasPermissions: roleInDB.permissions ? roleInDB.permissions.length : 0
-                });
+
 
                 const roleResponse = shouldIncludePermissions ? {
                     // 🔑 ROL CON PERMISOS (usuario editando su propio rol)
@@ -1344,8 +1403,8 @@ module.exports = {
                     description: roleInDB.description,
                     isGlobal: roleInDB.is_global,
                     isActive: roleInDB.is_active,
-                    permissions: (roleInDB.permissions && Array.isArray(roleInDB.permissions)) 
-                        ? roleInDB.permissions.map(permission => ({                            
+                    permissions: (roleInDB.permissions && Array.isArray(roleInDB.permissions))
+                        ? roleInDB.permissions.map(permission => ({
                             name: permission.name,
                             code: permission.code,
                             description: permission.description || '',
@@ -1385,7 +1444,7 @@ module.exports = {
                     // Regenerar token con el nuevo rol
                     const jwt = require('jsonwebtoken');
                     const SECRET_KEY = process.env.JWT_SECRET;
-                    
+
                     newToken = jwt.sign({
                         userId: id,
                         email: req.user.email,
@@ -1393,12 +1452,8 @@ module.exports = {
                         roleId: roleId,
                         userType: userType
                     }, SECRET_KEY, { expiresIn: '8h' });
-                    
-                    console.log("🔑 [UserController] Token regenerado para usuario que cambió su propio rol");
-                }
 
-                // 9. Debug: Verificar estructura de permisos
-                console.log("👤 [UserController] FORMATED USER:", JSON.stringify(formattedUser, null, 2));
+                }
 
                 // 11. Respuesta exitosa con información específica
                 const responseData = {
@@ -1412,10 +1467,8 @@ module.exports = {
                 if (isUpdatingOwnProfile && isRoleChanging) {
                     responseData.newToken = newToken;
                     responseData.changedRole = true;
-                    console.log("🔑 [UserController] Respuesta completa: token + permisos + changedRole");
                 } else if (isRoleChanging) {
                     responseData.changedRole = true;
-                    console.log("📋 [UserController] Respuesta básica: solo changedRole");
                 } else {
                     console.log("✏️ [UserController] Respuesta normal: solo actualización de datos");
                 }
@@ -1969,9 +2022,9 @@ module.exports = {
 
             // Buscar o crear registro de ubicación actual
             let [userPosition, created] = await user_current_position.findOrCreate({
-                where: { userId: userId },
+                where: { user_id: userId },
                 defaults: {
-                    userId: userId,
+                    user_id: userId,
                     latitude: parseFloat(latitude),
                     longitude: parseFloat(longitude),
                     accuracy: accuracy ? parseFloat(accuracy) : 999999.99,
@@ -2012,7 +2065,7 @@ module.exports = {
 
         } catch (error) {
             console.error("❌ Error actualizando ubicación del usuario:", error);
-            
+
             // Log detallado para debugging
             console.error("Detalles del error:", {
                 userId: req.params?.userId,

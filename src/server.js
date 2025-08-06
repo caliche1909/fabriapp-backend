@@ -18,6 +18,9 @@ const companyRoutes = require('./routes/companyRoutes');
 const userGeolocationRoutes = require('./routes/userGeolocationRoutes');
 const rolesRoutes = require('./routes/rolesRoutes');
 const modulesRoutes = require('./routes/modulesRoutes');
+const http = require('http');
+const initSockets = require('./sockets');
+
 const app = express();
 
 // Middleware
@@ -50,7 +53,12 @@ app.use('/api/modules', modulesRoutes);
 
 // Puerto del servidor
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Servidor corriendo en http://localhost:${PORT}`);
+const httpServer = http.createServer(app);
+
+// Inicializar Socket.IO
+initSockets(httpServer);
+
+httpServer.listen(PORT, () => {
+    console.log(`API y WebSocket corriendo en http://localhost:${PORT}`);
 });
 

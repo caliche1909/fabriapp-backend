@@ -1,6 +1,7 @@
 const Sequelize = require('sequelize');
 
 module.exports = function (sequelize, DataTypes) {
+
   const UserCurrentPosition = sequelize.define('user_current_position', {
     id: {
       type: DataTypes.INTEGER,
@@ -24,12 +25,7 @@ module.exports = function (sequelize, DataTypes) {
     },
     position: {
       type: DataTypes.GEOGRAPHY('POINT', 4326),
-      allowNull: false,
-      validate: {
-        notNull: {
-          msg: "La posición es requerida"
-        }
-      }
+      allowNull: true,       // Ahora puede ser NULL hasta que llegue la primera ubicación real
     },
     accuracy: {
       type: DataTypes.DECIMAL(8, 2),
@@ -112,7 +108,7 @@ module.exports = function (sequelize, DataTypes) {
   // Método para obtener las coordenadas como objeto
   UserCurrentPosition.prototype.getCoordinates = function () {
     if (!this.position) return null;
-    
+
     // Extraer coordenadas del POINT de PostGIS
     const coordinates = this.position.coordinates;
     return {
@@ -127,14 +123,14 @@ module.exports = function (sequelize, DataTypes) {
       type: 'Point',
       coordinates: [longitude, latitude]
     };
-    
+
     if (accuracy !== null) {
       this.accuracy = accuracy;
     }
-    
+
     this.last_update_source = source;
     this.is_active = true;
-    
+
     await this.save();
   };
 
@@ -161,7 +157,7 @@ module.exports = function (sequelize, DataTypes) {
   UserCurrentPosition.prototype.getTimeSinceLastUpdate = function () {
     const now = new Date();
     const diffSeconds = Math.floor((now - this.updated_at) / 1000);
-    
+
     if (diffSeconds < 60) {
       return `${diffSeconds} segundos`;
     } else if (diffSeconds < 3600) {
@@ -189,7 +185,7 @@ module.exports = function (sequelize, DataTypes) {
       )
       ORDER BY distance_meters ASC
     `;
-    
+
     return await sequelize.query(query, {
       replacements: {
         latitude: latitude,
@@ -213,7 +209,7 @@ module.exports = function (sequelize, DataTypes) {
       AND pos1.is_active = true 
       AND pos2.is_active = true
     `;
-    
+
     const result = await sequelize.query(query, {
       replacements: {
         userId1: userId1,
@@ -221,7 +217,7 @@ module.exports = function (sequelize, DataTypes) {
       },
       type: sequelize.QueryTypes.SELECT
     });
-    
+
     return result[0]?.distance_meters || -1;
   };
 
