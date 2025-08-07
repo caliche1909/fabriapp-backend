@@ -261,17 +261,9 @@ module.exports = {
     async deleteStoreImage(req, res) {
         const { storeId, imageId, publicId, image_url, isPrimary, user } = req.body
 
-        console.log('🔥 INICIO deleteStoreImage - Datos recibidos:', {
-            storeId,
-            imageId,
-            publicId,
-            image_url,
-            isPrimary,
-            user: user?.email || 'No user'
-        });
 
         if (!storeId || !imageId || !publicId || !image_url || !user) {
-            console.log('❌ Datos incompletos:', { storeId, imageId, publicId, image_url, user });
+
             return res.status(400).json({
                 success: false,
                 status: 400,
@@ -281,12 +273,12 @@ module.exports = {
         }
 
         const transaction = await sequelize.transaction();
-        console.log('🔄 Transacción iniciada:', transaction.id);
+
         let cloudinaryDeleted = false;
         let cloudinaryExists = false;
 
         try {
-            console.log('🔸 PASO 1: Verificando existencia en BD y Cloudinary...');
+
 
             // 🔸 PASO 1: Verificar existencia en AMBOS lugares primero          
 
@@ -299,32 +291,32 @@ module.exports = {
                 transaction
             });
             const existsInDatabase = !!imageRecord;
-            console.log('🗄️ Existe en BD:', existsInDatabase, imageRecord ? `ID: ${imageRecord.id}` : 'No encontrada');
+
 
             // 1.2 Verificar en Cloudinary
-            console.log('☁️ Verificando en Cloudinary...');
+
             try {
                 const cloudinaryInfo = await cloudinary.api.resource(publicId);
                 if (cloudinaryInfo && cloudinaryInfo.public_id) {
                     cloudinaryExists = true;
-                    console.log('☁️ Existe en Cloudinary:', cloudinaryInfo.public_id);
+
                 }
             } catch (cloudinaryError) {
-                console.log('☁️ Error verificando Cloudinary:', cloudinaryError.error?.http_code || cloudinaryError.message);
+
                 if (cloudinaryError.error && cloudinaryError.error.http_code === 404) {
                     cloudinaryExists = false;
-                    console.log('☁️ No existe en Cloudinary (404)');
+
                 } else {
                     // Si hay error de conectividad, asumimos que existe para intentar eliminarla
                     cloudinaryExists = true;
-                    console.log('☁️ Error de conectividad, asumiendo que existe');
+
                 }
             }
 
             // 🔸 PASO 2: Validar que existe en al menos uno de los dos lugares
-            console.log('🔸 PASO 2: Validando existencia - BD:', existsInDatabase, 'Cloudinary:', cloudinaryExists);
+
             if (!existsInDatabase && !cloudinaryExists) {
-                console.log('❌ No existe en ningún lugar, haciendo rollback');
+
                 await transaction.rollback();
                 return res.status(404).json({
                     success: false,
@@ -335,32 +327,32 @@ module.exports = {
             }
 
             // 🔸 PASO 3: Eliminar según los casos
-            console.log('🔸 PASO 3: Iniciando eliminación...');
+
             let databaseDeleted = false;
 
             // CASO 1: Existe en BD y Cloudinary → Eliminar de ambos
             if (existsInDatabase && cloudinaryExists) {
-                console.log('📋 CASO 1: Eliminando de BD y Cloudinary...');
+
 
                 // Eliminar de BD
-                console.log('🗄️ Eliminando de BD...');
+
                 await store_images.destroy({
                     where: { id: imageId },
                     transaction
                 });
                 databaseDeleted = true;
-                console.log('✅ Eliminada de BD exitosamente');
+
 
                 // Eliminar de Cloudinary
-                console.log('☁️ Eliminando de Cloudinary...');
+
                 try {
                     await cloudinary.uploader.destroy(publicId);
                     cloudinaryDeleted = true;
-                    console.log(`✅ Eliminada de Cloudinary exitosamente`);
+
                 } catch (error) {
-                    console.log('❌ Error eliminando de Cloudinary:', error.message);
+
                     await transaction.rollback();
-                    console.log('🔄 Rollback por error de Cloudinary');
+
                     return res.status(500).json({
                         success: false,
                         status: 500,
@@ -371,7 +363,7 @@ module.exports = {
 
                 // Manejar imagen principal si es necesario
                 if (isPrimary) {
-                    console.log('🖼️ Era imagen principal, buscando nueva imagen principal...');
+
                     const newPrimary = await store_images.findOne({
                         where: { store_id: storeId },
                         order: [['created_at', 'DESC']],
@@ -379,26 +371,21 @@ module.exports = {
                     });
                     if (newPrimary) {
                         await newPrimary.update({ is_primary: true }, { transaction });
-                        console.log('✅ Nueva imagen principal asignada:', newPrimary.id);
-                    } else {
-                        console.log('ℹ️ No hay más imágenes para asignar como principal');
+
                     }
                 }
             }
             // CASO 2: Existe solo en BD → Eliminar solo de BD
             else if (existsInDatabase && !cloudinaryExists) {
-                console.log('📋 CASO 2: Eliminando solo de BD...');
 
                 await store_images.destroy({
                     where: { id: imageId },
                     transaction
                 });
                 databaseDeleted = true;
-                console.log('✅ Eliminada de BD exitosamente (no existía en Cloudinary)');
 
                 // Manejar imagen principal si es necesario
                 if (isPrimary) {
-                    console.log('🖼️ Era imagen principal, buscando nueva imagen principal...');
                     const newPrimary = await store_images.findOne({
                         where: { store_id: storeId },
                         order: [['created_at', 'DESC']],
@@ -406,22 +393,18 @@ module.exports = {
                     });
                     if (newPrimary) {
                         await newPrimary.update({ is_primary: true }, { transaction });
-                        console.log('✅ Nueva imagen principal asignada:', newPrimary.id);
-                    } else {
-                        console.log('ℹ️ No hay más imágenes para asignar como principal');
                     }
                 }
             }
             // CASO 3: Existe solo en Cloudinary → Eliminar solo de Cloudinary
             else if (!existsInDatabase && cloudinaryExists) {
-                console.log(`📋 CASO 3: Eliminando solo de Cloudinary (no existe en BD)`);
 
                 try {
                     await cloudinary.uploader.destroy(publicId);
                     cloudinaryDeleted = true;
-                    console.log('✅ Eliminada de Cloudinary exitosamente (no existía en BD)');
+
                 } catch (error) {
-                    console.log('❌ Error eliminando de Cloudinary (CASO 3):', error.message);
+
                     return res.status(500).json({
                         success: false,
                         status: 500,
@@ -431,7 +414,7 @@ module.exports = {
                 }
             }
 
-            console.log('🔸 PASO 4: Recuperando tienda actualizada...');
+
             // Recuperar tienda actualizada con estructura consistente
             const updatedStore = await stores.findByPk(storeId, {
                 attributes: [
@@ -449,7 +432,8 @@ module.exports = {
                     'closing_time',
                     'city',
                     'state',
-                    'country'
+                    'country',
+                    'current_visit_status'
                 ],
                 include: [
                     {
@@ -471,8 +455,7 @@ module.exports = {
                 transaction
             });
 
-            console.log('📊 Tienda recuperada:', updatedStore ? `ID: ${updatedStore.id}` : 'No encontrada');
-            console.log('🖼️ Imágenes restantes:', updatedStore?.images?.length || 0);
+
 
             // 🎨 Formatear respuesta para el frontend (igual que otros controladores)
             const storeData = updatedStore.toJSON();
@@ -507,11 +490,10 @@ module.exports = {
             }
 
             // 🔸 PASO 5: Confirmar la transacción y devolver respuesta
-            console.log('🔸 PASO 5: Confirmando transacción...');
-            await transaction.commit();
-            console.log('✅ Transacción confirmada exitosamente');
 
-            console.log('🎉 ÉXITO: Imagen eliminada correctamente');
+            await transaction.commit();
+
+
             return res.status(200).json({
                 success: true,
                 status: 200,
@@ -520,27 +502,18 @@ module.exports = {
             });
 
         } catch (error) {
-            console.log('❌ ERROR CAPTURADO en catch principal:', error.message);
-            console.log('📋 Stack trace:', error.stack);
-            console.log('🔍 Detalles del error:', {
-                name: error.name,
-                message: error.message,
-                code: error.code,
-                sql: error.sql
-            });
+
 
             // 🔸 Solo hacer rollback si la transacción NO ha sido confirmada
             if (!transaction.finished) {
-                console.log('🔄 Haciendo rollback de la transacción...');
+
                 await transaction.rollback();
-                console.log('✅ Rollback completado');
-            } else {
-                console.log('ℹ️ Transacción ya terminada, no se hace rollback');
+
             }
 
             // 🔍 Manejo específico de errores de conectividad
             if (error.message && error.message.includes('ENOTFOUND')) {
-                console.log('🌐 Error de conectividad detectado');
+
                 return res.status(503).json({
                     success: false,
                     status: 503,
@@ -551,7 +524,7 @@ module.exports = {
             }
 
             // Error genérico
-            console.log('🚨 Devolviendo error genérico al cliente');
+
             return res.status(500).json({
                 success: false,
                 status: 500,
@@ -570,12 +543,7 @@ module.exports = {
         const { aspect, imageType, storeId, storeName, storeType, companyName, ownerId, ownerEmail } = body;
         let cloudinaryResult = null;
 
-        console.log("📸 INICIO uploadStoreImage - Datos recibidos:", {
-            storeId, storeName, storeType, companyName,
-            hasOwnerId: !!ownerId,
-            hasOwnerEmail: !!ownerEmail,
-            aspect, imageType
-        });
+
 
         try {
             // 1. Validaciones iniciales
@@ -647,17 +615,12 @@ module.exports = {
 
             const response = await storeImageController.createStoreImage(storeId, imageData);
 
-            console.log('✅ Imagen de tienda subida exitosamente:', {
-                storeId: store.id,
-                newImageUrl: cloudinaryResult.secure_url,
-                publicId: cloudinaryResult.public_id
-            });
+
 
             // 7. Respuesta exitosa
             return res.json(response);
 
         } catch (error) {
-            console.error('❌ Error en uploadStoreImage:', error);
 
             // Limpieza en caso de error después de subir a Cloudinary
             if (cloudinaryResult?.public_id) {
@@ -680,17 +643,7 @@ module.exports = {
         const { companyId, companyName, aspect, imageType, ownerEmail, currentImagePublicId } = body;
         let cloudinaryResult = null;
 
-        console.log("🏢 INICIO uploadCompanyLogoImage - Datos recibidos:", {
-            companyId,
-            companyName,
-            hasOwnerEmail: !!ownerEmail,
-            aspect,
-            imageType,
-            hasCurrentImagePublicId: !!currentImagePublicId,
-            hasFile: !!file,
-            fileSize: file?.size,
-            userId: req.user?.id // Usuario que hace la petición
-        });
+
 
         try {
             // ✅ PASO 1: Validaciones iniciales
@@ -767,12 +720,10 @@ module.exports = {
                     const deleteResult = await cloudinary.uploader.destroy(currentImagePublicId);
 
                     if (deleteResult.result === 'ok') {
-                        console.log("✅ Logo anterior eliminado exitosamente");
-                    } else {
-                        console.log("⚠️ Logo anterior no encontrado en Cloudinary:", deleteResult);
+
                     }
                 } catch (deleteError) {
-                    console.error("❌ Error eliminando logo anterior:", deleteError);
+
                     return res.status(500).json({
                         success: false,
                         status: 500,
@@ -812,12 +763,7 @@ module.exports = {
                 logo_public_id: cloudinaryResult.public_id
             });
 
-            console.log('✅ Logo de empresa subido exitosamente:', {
-                companyId: company.id,
-                companyName: company.name,
-                newLogoUrl: cloudinaryResult.secure_url,
-                publicId: cloudinaryResult.public_id
-            });
+
 
             // ✅ PASO 10: Respuesta exitosa
             return res.json({
@@ -829,7 +775,6 @@ module.exports = {
             });
 
         } catch (error) {
-            console.error('❌ Error en uploadCompanyLogoImage:', error);
 
             // Limpieza en caso de error después de subir a Cloudinary
             if (cloudinaryResult?.public_id) {
@@ -852,12 +797,7 @@ module.exports = {
         const { userId, userName, userEmail, companyName, aspect, imageType, ownerEmail, currentImagePublicId } = body;
         let cloudinaryResult = null;
 
-        console.log("📸 INICIO uploadProfileImage - Datos recibidos:", {
-            userId, userName, userEmail, companyName,
-            hasOwnerEmail: !!ownerEmail,
-            aspect, imageType,
-            hasCurrentImagePublicId: !!currentImagePublicId
-        });
+
 
         try {
             // 1. Validaciones iniciales
@@ -940,11 +880,7 @@ module.exports = {
                 image_public_id: cloudinaryResult.public_id
             });
 
-            console.log('✅ Imagen de perfil subida exitosamente:', {
-                userId: user.id,
-                newImageUrl: cloudinaryResult.secure_url,
-                publicId: cloudinaryResult.public_id
-            });
+
 
             // 8. Respuesta exitosa
             return res.json({
@@ -1063,29 +999,15 @@ async function uploadToCloudinaryUnified(buffer, {
         ]
     };
 
-    console.log("☁️ Subiendo imagen a Cloudinary:", {
-        folder: uploadOptions.folder,
-        public_id: uploadOptions.public_id,
-        tags: uploadOptions.tags,
-        entityType
-    });
 
     return new Promise((resolve, reject) => {
         const uploadStream = cloudinary.uploader.upload_stream(
             uploadOptions,
             (error, result) => {
                 if (error) {
-                    console.error('❌ Error en Cloudinary:', error);
                     reject(error);
                 } else {
-                    console.log('✅ Subida exitosa a Cloudinary:', {
-                        public_id: result.public_id,
-                        secure_url: result.secure_url,
-                        folder: result.folder,
-                        width: result.width,
-                        height: result.height,
-                        bytes: result.bytes
-                    });
+
                     resolve(result);
                 }
             }

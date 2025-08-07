@@ -1176,7 +1176,7 @@ module.exports = {
 
                 return {
                     id: user.id,
-                    name: `${user.first_name} ${user.last_name}`,
+                    name: `${user.first_name.split(' ')[0]} ${user.last_name.split(' ')[0]}`,
                     imageUrl: user.image_url,
                     location: null, // Se actualizará via WebSocket
                     lastLocationUpdate: null // Se actualizará via WebSocket

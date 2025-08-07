@@ -5,20 +5,22 @@ const { user_current_position } = require('../../models');
  * Se registra desde sockets/index.js.
  */
 module.exports = (io, socket) => {
-  socket.on('position_update', async ({ lat, lng, accuracy }) => {
+  socket.on('position_update', async ({ lat, lng, accuracy, timestamp }) => {
     try {
       // Validar datos de entrada
       if (typeof lat !== 'number' || typeof lng !== 'number') {
-        console.warn(`Posición inválida recibida de usuario ${socket.userId}`);
         return;
       }
+
+      // Usar timestamp del frontend si está disponible, sino usar fecha del servidor
+      const updateTime = timestamp ? new Date(timestamp) : new Date();
 
       // Actualizar posición en la base de datos
       await user_current_position.update(
         {
           position: { type: 'Point', coordinates: [lng, lat] },
           accuracy: accuracy ?? null,
-          updated_at: new Date(),
+          updated_at: updateTime,
           last_update_source: 'mobile_app'
         },
         { where: { user_id: socket.userId } }
@@ -30,12 +32,12 @@ module.exports = (io, socket) => {
         lat,
         lng,
         accuracy: accuracy ?? null,
-        updatedAt: Date.now()
+        updatedAt: updateTime.getTime() // Enviar timestamp del frontend como número
       };
 
       io.to(`company_${socket.companyId}`).emit('position_update', positionData);
 
-      console.log(`📍 Posición actualizada - Usuario: ${socket.userId}, Lat: ${lat}, Lng: ${lng}`);
+      console.log(`📍 Posición actualizada - Usuario: ${socket.userId}, Lat: ${lat}, Lng: ${lng}, Timestamp: ${updateTime.toISOString()}`);
     } catch (err) {
       console.error(`🚨 Error guardando posición del usuario ${socket.userId}:`, err.message);
     }

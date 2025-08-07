@@ -108,19 +108,15 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.DATE,
       allowNull: false,
       defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
-    },
-    deleted_at: {
-      type: DataTypes.DATE,
-      allowNull: true
     }
+
   }, {
     sequelize,
     tableName: 'store_images',
     timestamps: true,
     createdAt: 'created_at',
     updatedAt: 'updated_at',
-    paranoid: true, // Habilita borrado lógico
-    deletedAt: 'deleted_at',
+    paranoid: false, // Habilita borrado lógico   
     underscored: true,
     freezeTableName: true,
     schema: 'public',
@@ -147,14 +143,9 @@ module.exports = (sequelize, DataTypes) => {
         unique: true,
         fields: [{ name: "store_id" }, { name: "is_primary" }],
         where: {
-          is_primary: true,
-          deleted_at: null
+          is_primary: true
         }
       },
-      {
-        name: "idx_store_images_deleted_at",
-        fields: [{ name: "deleted_at" }]
-      }
     ]
   });
 
