@@ -2,6 +2,79 @@ const { roles, companies, role_permissions, permissions, user_companies, users }
 const { Op } = require('sequelize');
 const { sequelize } = require('../models');
 
+
+
+/**
+ * Obtener roles para creación de usuarios (excluye SUPER_ADMIN)
+ * Para owners que crean colaboradores
+ */
+const getRolesForUserCreation = async (req, res) => {
+    try {
+        const { companyId } = req.params;
+
+        console.log('👤 [RolesController] Obteniendo roles para creación de usuarios, empresa:', companyId);
+
+        // Verificar que la empresa existe
+        const company = await companies.findByPk(companyId);
+        if (!company) {
+            return res.status(404).json({
+                success: false,
+                status: 404,
+                message: 'Empresa no encontrada',
+                roles: []
+            });
+        }
+
+        // Obtener roles excluyendo SUPER_ADMIN
+        const rolesList = await roles.findAll({
+            where: {
+                [Op.and]: [
+                    { is_active: true },
+                    {
+                        [Op.or]: [
+                            { company_id: null }, // Roles globales
+                            { company_id: companyId } // Roles específicos de la empresa
+                        ]
+                    },
+                    {
+                        name: { [Op.ne]: 'SUPER_ADMIN' }, // Excluir SUPER_ADMIN                     
+                    }
+                ]
+            },
+            order: [
+                ['is_global', 'DESC'], // Roles globales primero
+                ['name', 'ASC'] // Luego ordenar por nombre
+            ]
+        });
+
+        // Formatear roles para satisfacer la interfaz del frontend
+        const formattedRoles = rolesList.map(role => ({
+            id: role.id,
+            name: role.name,
+            label: role.label,
+            description: role.description,
+            isGlobal: role.is_global,
+            companyId: role.company_id
+        }));
+
+        res.status(200).json({
+            success: true,
+            status: 200,
+            message: 'Roles para creación obtenidos exitosamente',
+            roles: formattedRoles
+        });
+
+    } catch (error) {
+        console.error('❌ [RolesController] Error al obtener roles para creación:', error);
+        res.status(500).json({
+            success: false,
+            status: 500,
+            message: 'Error interno del servidor',
+            roles: []
+        });
+    }
+};
+
 /**
  * Obtener roles disponibles para una empresa específica
  * Incluye roles globales (company_id = NULL) y roles propios de la empresa
@@ -9,8 +82,6 @@ const { sequelize } = require('../models');
 const getRolesByCompany = async (req, res) => {
     try {
         const { companyId } = req.params;
-
-        console.log('👤 [RolesController] Obteniendo roles para empresa:', companyId);
 
         // Verificar que la empresa existe
         const company = await companies.findByPk(companyId);
@@ -36,8 +107,6 @@ const getRolesByCompany = async (req, res) => {
                 ['name', 'ASC'] // Luego ordenar por nombre
             ]
         });
-
-        console.log('👤 [RolesController] Roles encontrados:', rolesList.length);
 
         // Formatear roles para satisfacer la interfaz del frontend
         const formattedRoles = rolesList.map(role => ({
@@ -358,8 +427,8 @@ const deleteCompanyRole = async (req, res) => {
 
         if (usersWithRole.length > 0) {
             const usersList = usersWithRole.map(uc => {
-                const fullName = uc.user.first_name && uc.user.last_name 
-                    ? `${uc.user.first_name} ${uc.user.last_name}` 
+                const fullName = uc.user.first_name && uc.user.last_name
+                    ? `${uc.user.first_name} ${uc.user.last_name}`
                     : uc.user.email;
                 return fullName;
             }).join(', ');
@@ -588,77 +657,7 @@ const createCompanyRole = async (req, res) => {
 };
 
 
-/**
- * Obtener roles para creación de usuarios (excluye SUPER_ADMIN)
- * Para owners que crean colaboradores
- */
-const getRolesForUserCreation = async (req, res) => {
-    try {
-        const { companyId } = req.params;
 
-        console.log('👤 [RolesController] Obteniendo roles para creación de usuarios, empresa:', companyId);
-
-        // Verificar que la empresa existe
-        const company = await companies.findByPk(companyId);
-        if (!company) {
-            return res.status(404).json({
-                success: false,
-                status: 404,
-                message: 'Empresa no encontrada',
-                roles: []
-            });
-        }
-
-        // Obtener roles excluyendo SUPER_ADMIN
-        const rolesList = await roles.findAll({
-            where: {
-                [Op.and]: [
-                    {
-                        [Op.or]: [
-                            { company_id: null }, // Roles globales
-                            { company_id: companyId } // Roles específicos de la empresa
-                        ]
-                    },
-                    {
-                        name: { [Op.ne]: 'SUPER_ADMIN' } // Excluir SUPER_ADMIN
-                    }
-                ]
-            },
-            order: [
-                ['is_global', 'DESC'], // Roles globales primero
-                ['name', 'ASC'] // Luego ordenar por nombre
-            ]
-        });
-
-        console.log('👤 [RolesController] Roles para creación encontrados:', rolesList.length);
-
-        // Formatear roles para satisfacer la interfaz del frontend
-        const formattedRoles = rolesList.map(role => ({
-            id: role.id,
-            name: role.name,
-            label: role.label,
-            description: role.description,
-            isGlobal: role.is_global,
-            companyId: role.company_id
-        }));
-
-        res.status(200).json({
-            success: true,
-            status: 200,
-            message: 'Roles para creación obtenidos exitosamente',
-            roles: formattedRoles
-        });
-
-    } catch (error) {
-        console.error('❌ [RolesController] Error al obtener roles para creación:', error);
-        res.status(500).json({
-            success: false,
-            status: 500,
-            message: 'Error interno del servidor',
-            roles: []
-        });
-    }
-};
 
 
 

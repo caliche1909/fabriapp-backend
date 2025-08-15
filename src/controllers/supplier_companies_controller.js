@@ -16,7 +16,6 @@ module.exports = {
 
     //Método para crear un nuevo proveedor
     async createSupplier(req, res) {
-        console.log("📌 Intentando registrar un nuevo proveedor...", req.body);
 
         try {
             // Extraer los datos del cuerpo de la petición

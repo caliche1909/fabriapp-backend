@@ -11,6 +11,7 @@ module.exports = {
 
     // 📌 LOGIN DE USUARIO
     async login(req, res) {
+
         try {
             const { email, password } = req.body;
 
@@ -1211,9 +1212,6 @@ module.exports = {
         try {
             const { id } = req.params;
             const { name, lastName, phone, roleId, allowAccess, requireGeolocation, companyId } = req.body;
-
-            console.log("👤 [UserController] Datos del usuario que se esta actualizando:", req.body);
-            console.log("👤 [UserController] Datos del usuario que esta operando:", req.user);
 
             //1. Validar que todos los campos requeridos estén presentes
             if (!name || !lastName || !phone || !roleId || !allowAccess || !companyId) {

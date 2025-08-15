@@ -35,10 +35,14 @@ module.exports = function (sequelize, DataTypes) {
         tax_id: {
             type: DataTypes.STRING(20),
             allowNull: true,
+            defaultValue: null,
             unique: 'companies_tax_id_key',
             validate: {
-                isTaxIdValid: function(value) {
+                isTaxIdValid: function (value) {
+                    // Acepta null o string vacío sin validación
                     if (value === null || value === '') return;
+
+                    // Si tiene valor, aplica la validación
                     if (!/^[A-Z0-9\-]+$/.test(value)) {
                         throw new Error('El NIT/RUT solo puede contener letras mayúsculas, números y guiones');
                     }
@@ -92,11 +96,20 @@ module.exports = function (sequelize, DataTypes) {
         logo_url: {
             type: DataTypes.STRING(255),
             allowNull: true,
+            defaultValue: null,
             validate: {
-                isUrlOrEmpty: function(value) {
+                isUrlOrEmpty: function (value) {
+                    // Acepta null o string vacío sin validación
                     if (value === null || value === '') return;
-                    if (!/^https?:\/\//.test(value)) {
-                        throw new Error('El formato de la URL del logo no es válido');
+
+                    // Si tiene valor, valida que sea una URL HTTP/HTTPS válida
+                    try {
+                        new URL(value); // Intenta crear un objeto URL
+                        if (!value.startsWith('http://') && !value.startsWith('https://')) {
+                            throw new Error();
+                        }
+                    } catch {
+                        throw new Error('El formato de la URL del logo no es válido. Debe comenzar con http:// o https://');
                     }
                 }
             }
@@ -109,11 +122,20 @@ module.exports = function (sequelize, DataTypes) {
         website: {
             type: DataTypes.STRING(255),
             allowNull: true,
+            defaultValue: null,
             validate: {
-                isUrlOrEmpty: function(value) {
+                isUrlOrEmpty: function (value) {
+                    // Acepta null o string vacío sin validación
                     if (value === null || value === '') return;
-                    if (!/^https?:\/\//.test(value)) {
-                        throw new Error('El formato de la URL del sitio web no es válido');
+
+                    // Si tiene valor, valida que sea una URL HTTP/HTTPS válida
+                    try {
+                        new URL(value); // Intenta crear un objeto URL
+                        if (!value.startsWith('http://') && !value.startsWith('https://')) {
+                            throw new Error();
+                        }
+                    } catch {
+                        throw new Error('El formato de la URL del sitio web no es válido. Debe comenzar con http:// o https://');
                     }
                 }
             }
@@ -172,21 +194,21 @@ module.exports = function (sequelize, DataTypes) {
     });
 
     // Métodos de instancia para manejar PostGIS
-    Company.prototype.setUbicacion = function(lat, lng) {
-        return sequelize.fn('ST_SetSRID', 
-            sequelize.fn('ST_MakePoint', lng, lat), 
+    Company.prototype.setUbicacion = function (lat, lng) {
+        return sequelize.fn('ST_SetSRID',
+            sequelize.fn('ST_MakePoint', lng, lat),
             4326
         );
     };
 
-    Company.prototype.getLatitud = function() {
+    Company.prototype.getLatitud = function () {
         if (this.ubicacion) {
             return sequelize.fn('ST_Y', this.ubicacion);
         }
         return null;
     };
 
-    Company.prototype.getLongitud = function() {
+    Company.prototype.getLongitud = function () {
         if (this.ubicacion) {
             return sequelize.fn('ST_X', this.ubicacion);
         }
@@ -194,25 +216,25 @@ module.exports = function (sequelize, DataTypes) {
     };
 
     // Método estático para buscar compañías por proximidad
-    Company.findByProximity = function(lat, lng, radiusKm = 10) {
-        const punto = sequelize.fn('ST_SetSRID', 
-            sequelize.fn('ST_MakePoint', lng, lat), 
+    Company.findByProximity = function (lat, lng, radiusKm = 10) {
+        const punto = sequelize.fn('ST_SetSRID',
+            sequelize.fn('ST_MakePoint', lng, lat),
             4326
         );
-        
+
         return this.findAll({
             where: sequelize.where(
-                sequelize.fn('ST_DWithin', 
-                    sequelize.col('ubicacion'), 
-                    punto, 
+                sequelize.fn('ST_DWithin',
+                    sequelize.col('ubicacion'),
+                    punto,
                     radiusKm / 111.32
-                ), 
+                ),
                 true
             ),
             attributes: {
                 include: [
-                    [sequelize.fn('ST_Distance', 
-                        sequelize.col('ubicacion'), 
+                    [sequelize.fn('ST_Distance',
+                        sequelize.col('ubicacion'),
                         punto
                     ) * 111320, 'distancia_metros']
                 ]
@@ -268,7 +290,7 @@ module.exports = function (sequelize, DataTypes) {
                 // Establecer todas las otras empresas del usuario como no predeterminadas
                 await sequelize.models.user_companies.update(
                     { is_default: false },
-                    { 
+                    {
                         where: { user_id: userId },
                         transaction
                     }
