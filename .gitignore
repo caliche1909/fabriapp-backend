@@ -78,7 +78,9 @@ web_modules/
 .env.test.local
 .env.production.local
 .env.local
-.env.*
+.env.production
+
+# PERMITIR: .env.example debe subirse para documentación
 
 # Database backups (NUNCA SUBIR - CONTIENEN DATOS SENSIBLES)
 ../backup_database/
