@@ -970,7 +970,7 @@ module.exports = {
 
             // 6. Determinar el tipo de usuario basado en el rol
             const userType = (roleData.name === 'OWNER') ? 'owner' : 'collaborator';
-            console.log(`👤 [UserController] Rol asignado: ${roleData.name}, Tipo usuario: ${userType}`);
+
 
             // 7. Actualizar datos del usuario si es necesario
             existingUser.require_geolocation = userDataToCreate.requireGeolocation || existingUser.require_geolocation;
@@ -1467,8 +1467,6 @@ module.exports = {
                     responseData.changedRole = true;
                 } else if (isRoleChanging) {
                     responseData.changedRole = true;
-                } else {
-                    console.log("✏️ [UserController] Respuesta normal: solo actualización de datos");
                 }
 
                 return res.status(200).json(responseData);
@@ -1500,7 +1498,7 @@ module.exports = {
 
     // 📌 Obtener todos los usuarios
     async list(req, res) {
-        console.log("📌 Llegó a la función list");
+
         try {
             const allUsers = await users.findAll();
             res.status(200).json(allUsers);
@@ -1511,7 +1509,6 @@ module.exports = {
 
     // 📌 Obtener todos los usuarios vendedores de una compañía específica
     async getSellers(req, res) {
-        console.log("📌 Intentando obtener vendedores de una compañía...", req.params);
 
         try {
             const { company_id } = req.params;
@@ -1620,7 +1617,6 @@ module.exports = {
                 };
             });
 
-            console.log(`✅ Vendedores obtenidos para compañía ${company_id}:`, formattedSellers.length);
 
             res.status(200).json({
                 success: true,
@@ -1659,10 +1655,7 @@ module.exports = {
     // 📌 Crear un usuario
     async create(req, res) {
         try {
-            console.log("➡️ POST /api/users - Datos recibidos:", req.body);
-
             if (!req.body || Object.keys(req.body).length === 0) {
-                console.log("⚠️ El body está vacío");
                 return res.status(400).json({ message: "El cuerpo de la solicitud no puede estar vacío" });
             }
 
@@ -1679,7 +1672,6 @@ module.exports = {
                 phone
             });
 
-            console.log("✅ Usuario creado:", newUser);
             res.status(201).json(newUser);
         } catch (error) {
             console.error("❌ Error en createUser:", error.message);

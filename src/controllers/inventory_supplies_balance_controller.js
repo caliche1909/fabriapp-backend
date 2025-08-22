@@ -3,8 +3,7 @@ const { inventory_supplies_balance, inventory_supplies, measurement_units, suppl
 module.exports = {
     // 📌 Método para obtener el balance de insumos de una compañía específica
     async getListInventorySuppliesBalance(req, res) {
-        console.log("📌 Intentando obtener el balance de insumos de una compañía...", req.params);
-
+        
         try {
             const { company_id } = req.params;
 
@@ -68,7 +67,7 @@ module.exports = {
                 }
             }));
 
-            console.log(`✅ Balances obtenidos para compañía ${company_id}:`, formattedBalances.length);
+            
 
             res.status(200).json({
                 success: true,

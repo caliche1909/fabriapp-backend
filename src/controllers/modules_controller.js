@@ -6,8 +6,7 @@ const { modules, submodules, permissions } = require('../models');
  */
 const getModulesWithPermissions = async (req, res) => {
     try {
-        console.log('🔧 [ModulesController] Obteniendo módulos con submódulos y permisos');
-
+    
         // Obtener todos los módulos activos con sus submódulos y permisos
         const modulesList = await modules.findAll({
             where: {
@@ -43,7 +42,7 @@ const getModulesWithPermissions = async (req, res) => {
             ]
         });
 
-        console.log('🔧 [ModulesController] Módulos encontrados:', modulesList.length);
+    
 
         // Formatear módulos para satisfacer las interfaces del frontend
         const formattedModules = modulesList.map(module => ({

@@ -80,8 +80,7 @@ const getSellerWithRole = async (userId, companyId) => {
 module.exports = {
     // 📌 Método para obtener todas las rutas de una compañía
     async getListRoutes(req, res) {
-        console.log("📌 Intentando obtener todas las rutas de una compañía...", req.params);
-
+        
         try {
             const { company_id } = req.params;
 
@@ -177,7 +176,6 @@ module.exports = {
 
     // 📌 Método para crear una nueva ruta
     async createRoute(req, res) {
-        console.log("📌 Intentando crear una nueva ruta...", req.body);
 
         try {
             const { company_id } = req.params;
@@ -220,8 +218,6 @@ module.exports = {
                 stores: []
             };
 
-            console.log("✅ Ruta creada exitosamente:", formattedRoute);
-
             res.status(201).json({
                 success: true,
                 status: 201,
@@ -241,7 +237,6 @@ module.exports = {
 
     // 📌 Método para actualizar una ruta
     async updateRoute(req, res) {
-        console.log("📌 Intentando actualizar una ruta...", req.body);
 
         try {
             const { id } = req.params;
@@ -285,8 +280,6 @@ module.exports = {
                 // ✅ NO incluimos stores
             };
 
-            console.log("✅ Ruta actualizada exitosamente:", formattedRoute);
-
             res.status(200).json({
                 success: true,
                 status: 200,
@@ -306,7 +299,6 @@ module.exports = {
 
     // 📌 Método para eliminar una ruta
     async deleteRoute(req, res) {
-        console.log("📌 Intentando eliminar una ruta...");
 
         try {
             const { id } = req.params;

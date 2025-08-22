@@ -36,8 +36,7 @@ module.exports = (io, socket) => {
       };
 
       io.to(`company_${socket.companyId}`).emit('position_update', positionData);
-
-      console.log(`📍 Posición actualizada - Usuario: ${socket.userId}, Lat: ${lat}, Lng: ${lng}, Timestamp: ${updateTime.toISOString()}`);
+     
     } catch (err) {
       console.error(`🚨 Error guardando posición del usuario ${socket.userId}:`, err.message);
     }

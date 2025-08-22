@@ -12,8 +12,6 @@ const getRolesForUserCreation = async (req, res) => {
     try {
         const { companyId } = req.params;
 
-        console.log('👤 [RolesController] Obteniendo roles para creación de usuarios, empresa:', companyId);
-
         // Verificar que la empresa existe
         const company = await companies.findByPk(companyId);
         if (!company) {
@@ -145,7 +143,6 @@ const getRolePermissions = async (req, res) => {
         const { roleId } = req.params;
         const { companyId } = req.query;
 
-        console.log('🔐 [RolesController] Obteniendo permisos del rol:', roleId, 'para empresa:', companyId);
 
         // Verificar que el rol existe
         const role = await roles.findByPk(roleId);
@@ -167,7 +164,6 @@ const getRolePermissions = async (req, res) => {
             attributes: ['permission_id']
         });
 
-        console.log('🔐 [RolesController] Permisos del rol encontrados:', rolePermissions.length);
 
         // Extraer solo los IDs de permisos
         const permissionIds = rolePermissions.map(rp => rp.permission_id);
@@ -366,8 +362,6 @@ const deleteCompanyRole = async (req, res) => {
         const { roleId } = req.params;
         const { companyId } = req.query;
 
-        console.log('🗑️ [RolesController] Eliminando rol personalizado:', roleId, 'de empresa:', companyId);
-
         // 1. Validar que todos los datos requeridos estén presentes
         if (!roleId || !companyId) {
             return res.status(400).json({
@@ -453,12 +447,11 @@ const deleteCompanyRole = async (req, res) => {
                 transaction
             });
 
-            console.log('🗑️ [RolesController] Permisos del rol eliminados');
 
             // 8. Eliminar el rol
             await existingRole.destroy({ transaction });
 
-            console.log('🗑️ [RolesController] Rol eliminado:', existingRole.id);
+
 
             // 9. Confirmar transacción
             await transaction.commit();
@@ -585,7 +578,7 @@ const createCompanyRole = async (req, res) => {
             });
         }
 
-        console.log('✅ [RolesController] Todos los permisos son válidos:', validPermissions.length);
+
 
         // 5. Crear el rol en la base de datos usando transacción
         //    - Insertar en la tabla roles con los datos normalizados
@@ -604,7 +597,7 @@ const createCompanyRole = async (req, res) => {
                 is_active: true
             }, { transaction });
 
-            console.log('✅ [RolesController] Rol creado con ID:', newRole.id);
+
 
             // 6. Asignar permisos al rol creado
             const rolePermissionsData = permissions.map(permissionId => ({
@@ -615,7 +608,7 @@ const createCompanyRole = async (req, res) => {
 
             await role_permissions.bulkCreate(rolePermissionsData, { transaction });
 
-            console.log('✅ [RolesController] Permisos asignados:', rolePermissionsData.length);
+
 
             // Confirmar transacción
             await transaction.commit();

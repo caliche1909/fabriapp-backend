@@ -257,8 +257,7 @@ module.exports = {
         } catch (error) {
             // 🚨 Rollback en caso de error
             await transaction.rollback();
-            console.error("❌ Error al crear tienda:", error);
-
+            
             // 🔍 Manejo específico de errores de restricción única
             if (error.name === 'SequelizeUniqueConstraintError') {
                 if (error.original && error.original.constraint) {
@@ -896,7 +895,7 @@ module.exports = {
 
     // 📌 Método para eliminar una tienda 
     async deleteStore(req, res) {
-        console.log("📌 Intentando eliminar una tienda...");
+        
         try {
             const { id } = req.params;
 
@@ -1177,7 +1176,7 @@ module.exports = {
                 }
             );
 
-            console.log(`✅ Reseteo de ruta completado - Ruta ID: ${route_id}, Tiendas reseteadas: ${updatedRows}`);
+           
 
             res.status(200).json({
                 success: true,

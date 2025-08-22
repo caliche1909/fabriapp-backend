@@ -34,6 +34,41 @@ app.get('/', (req, res) => {
     res.send(`API funcionando en el puerto ${process.env.PORT} 🚀`);
 });
 
+// Health check endpoint para Docker/Kubernetes
+app.get('/health', (req, res) => {
+    const healthcheck = {
+        uptime: process.uptime(),
+        message: 'OK',
+        timestamp: Date.now(),
+        env: process.env.NODE_ENV || 'development',
+        port: process.env.PORT || 3000
+    };
+    
+    try {
+        res.status(200).json(healthcheck);
+    } catch (error) {
+        healthcheck.message = error;
+        res.status(503).json(healthcheck);
+    }
+});
+
+// Readiness check - más completo (opcional para Kubernetes)
+app.get('/ready', (req, res) => {
+    // Aquí podrías agregar verificaciones adicionales si necesitas
+    // como conexión a base de datos, servicios externos, etc.
+    const readiness = {
+        status: 'ready',
+        timestamp: Date.now(),
+        checks: {
+            server: 'ok',
+            // database: 'ok',  // Agregar cuando implementes verificación de DB
+            // redis: 'ok',     // Agregar si usas Redis, etc.
+        }
+    };
+    
+    res.status(200).json(readiness);
+});
+
 //Registrar las rutas
 app.use('/api/users', userRoutes);
 app.use('/api/measurement_units', measurementUnitsRoutes);

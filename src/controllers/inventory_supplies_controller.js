@@ -6,8 +6,7 @@ module.exports = {
 
     // 📌(Verificado 1.1) Método para obtener todos los insumos de una compañía
     async getListOfInventorySupplies(req, res) {
-        console.log("📌 Intentando obtener todos los insumos de una compañía...", req.params);
-
+      
         try {
             const { company_id } = req.params;
 
@@ -73,7 +72,7 @@ module.exports = {
                 last_purchase_date: supply.last_purchase_date
             }));
 
-            console.log("✅ Insumos obtenidos:", formattedSupplies.length);
+           
             res.status(200).json({
                 success: true,
                 message: "Insumos obtenidos exitosamente",
@@ -93,7 +92,7 @@ module.exports = {
 
     // 📌(Verificado 1.1) Método para crear un nuevo insumo
     async createInventorySupply(req, res) {
-        console.log("📌 Intentando registrar un nuevo insumo...", req.body);
+    
 
         try {
             // Extraer los datos del cuerpo de la solicitud
@@ -249,7 +248,7 @@ module.exports = {
 
     // 📌(Verificado 1.1) Método para actualizar un insumo por ID
     async updateInventorySupply(req, res) {
-        console.log("📌 Intentando actualizar un insumo por ID...", req.body);
+    
 
         try {
             const {
@@ -380,7 +379,7 @@ module.exports = {
 
     // 📌 Método para eliminar un insumo por ID
     async deleteInventorySupply(req, res) {
-        console.log("📌 Intentando eliminar un insumo por ID...", req.params.id);
+
 
         try {
             // Extraer el id del insumo desde los parámetros de la URL
@@ -418,7 +417,7 @@ module.exports = {
 
     // 📌 Método para obtener un insumo por ID
     async getInventorySupplyById(req, res) {
-        console.log("📌 Intentando obtener insumo por ID:", req.params.id);
+     
 
         try {
             const { id } = req.params;

@@ -218,8 +218,7 @@ module.exports = {
 
     //Método para obtener todos los proveedores
     async getAllSuppliers(req, res) {
-        console.log("📌 Intentando obtener todos los proveedores...");
-
+        
         try {
             // Buscar todos los proveedores
             const suppliers = await supplier_companies.findAll({

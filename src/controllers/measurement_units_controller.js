@@ -5,7 +5,7 @@ module.exports = {
 
     // 📌 Obtener todas las unidades de medida ordenadas por id
     async list(req, res) {
-        console.log("📌 Recogiendo unidades de medida en el measurement_units_controller...");
+      
         try {
             const allMeasurementUnits = await measurement_units.findAll({
                 order: [['id', 'ASC']], // 🔹 Ordenar por id de forma ascendente

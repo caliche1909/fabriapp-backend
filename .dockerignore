@@ -1,0 +1,55 @@
+# Dependencias (se instalan en el Dockerfile)
+node_modules
+npm-debug.log
+yarn-error.log
+
+# Archivos de entorno (no deben ir en la imagen)
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+
+# Archivos de Git
+.git
+.gitignore
+
+# Archivos de desarrollo
+.vscode
+.idea
+
+#  Logs
+logs
+*.log
+
+#Archivos temporales
+.tmp
+.temp
+
+# Archivos de sistema
+.DS_Store
+Thumbs.db
+
+# Documentación
+README.md
+*.md
+
+#  Archivos de test
+test/
+tests/
+__tests__/
+coverage/
+
+# Archivos de backup y scripts de desarrollo
+src/test-sequelize.js
+src/backup-before-commit.js
+src/backup-with-description.js
+src/restore-backup.js
+
+# Docker
+Dockerfile
+.dockerignore
+
+# Archivos de desarrollo de Sequelize
+migrations/
+seeders/

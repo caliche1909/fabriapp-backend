@@ -5,9 +5,8 @@ module.exports = {
     // 📌 METODO PARA ACTUALIZAR EL IS_DEFAULT DE LA EMPRESA A TRUE
     async updateIsDefaultTrue(req, res) {
         try {
-            const { id } = req.params;
+            const { id } = req.params;          
             
-            console.log(`📌 Intentando establecer compañía ${id} como predeterminada...`);
 
             // Verificar que la compañía existe
             const company = await companies.findByPk(id);
@@ -124,8 +123,7 @@ module.exports = {
                     ]
                 }
             });
-
-            console.log(`✅ Compañía ${updatedCompany.name} actualizada exitosamente`);
+           
 
             // Procesar coordenadas PostGIS - pueden ser null si no hay ubicación
             const responseLatitude = updatedCompany.dataValues?.latitude 
