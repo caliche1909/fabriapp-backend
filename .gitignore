@@ -79,6 +79,7 @@ web_modules/
 .env.production.local
 .env.local
 .env.production
+src/config/send-emails.json
 
 # PERMITIR: .env.example debe subirse para documentación
 

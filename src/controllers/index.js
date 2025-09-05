@@ -12,6 +12,7 @@ const store_imagesController = require('./store_images_controller');
 const register_company_and_userController = require('./register_company_and_user_controller');
 const companyController = require('./company_controller');
 const rolesController = require('./roles_controller');
+const authController = require('./auth_controller');
 
 module.exports = {
     userController,
@@ -27,6 +28,7 @@ module.exports = {
     store_imagesController,
     register_company_and_userController,
     companyController,
-    rolesController
-    
+    rolesController,
+    authController
+
 };

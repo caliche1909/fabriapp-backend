@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 
 //immportacion de rutas 
+const authRoutes = require('./routes/authRoutes');
 const userRoutes = require('./routes/userRoutes');
 const measurementUnitsRoutes = require('./routes/measurementUnitsRoutes');
 const supplierCompaniesRoutes = require('./routes/supplierCompaniesRouter');
@@ -70,6 +71,7 @@ app.get('/ready', (req, res) => {
 });
 
 //Registrar las rutas
+app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/measurement_units', measurementUnitsRoutes);
 app.use('/api/supplier_companies', supplierCompaniesRoutes);

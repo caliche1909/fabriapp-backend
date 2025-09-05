@@ -3,6 +3,7 @@ var _SequelizeMeta = require("./SequelizeMeta");
 var _companies = require("./companies");
 var _inventory_supplies = require("./inventory_supplies");
 var _measurement_units = require("./measurement_units");
+var _password_resets = require("./password_resets");
 var _payment_methods = require("./payment_methods");
 var _products = require("./products");
 var _recipe_items = require("./recipe_items");
@@ -27,6 +28,7 @@ function initModels(sequelize) {
   var companies = _companies(sequelize, DataTypes);
   var inventory_supplies = _inventory_supplies(sequelize, DataTypes);
   var measurement_units = _measurement_units(sequelize, DataTypes);
+  var password_resets = _password_resets(sequelize, DataTypes);
   var payment_methods = _payment_methods(sequelize, DataTypes);
   var products = _products(sequelize, DataTypes);
   var recipe_items = _recipe_items(sequelize, DataTypes);
@@ -114,11 +116,16 @@ function initModels(sequelize) {
   user_current_position.belongsTo(users, { as: "user", foreignKey: "user_id", onDelete: "CASCADE" });
   users.hasOne(user_current_position, { as: "current_position", foreignKey: "user_id", onDelete: "CASCADE" });
 
+  // ✅ Relaciones para password_resets
+  password_resets.belongsTo(users, { as: "user", foreignKey: "user_id", onDelete: "CASCADE" });
+  users.hasMany(password_resets, { as: "password_resets", foreignKey: "user_id", onDelete: "CASCADE" });
+
   return {
     SequelizeMeta,
     companies,
     inventory_supplies,
     measurement_units,
+    password_resets,
     payment_methods,
     products,
     recipe_items,

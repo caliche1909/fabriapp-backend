@@ -100,9 +100,9 @@ const getWelcomeEmailTemplate = (userData) => ({
 
                     <p>Si tiene alguna pregunta o necesita asistencia, no dude en contactarnos:</p>
                     <ul>
-                        <li>Email: soporte@sistemapp.com</li>
-                        <li>Teléfono: +57 300 000 0000</li>
-                        <li>WhatsApp: +57 300 000 0000</li>
+                        <li>Email: soporte@fabriapp.com</li>
+                        <li>Teléfono: +57 323 295 1780</li>
+                        
                     </ul>
                 </div>
                 <div class="footer">
@@ -130,11 +130,11 @@ const getWelcomeEmailTemplate = (userData) => ({
         Puede iniciar sesión en: ${process.env.FRONTEND_URL}/login
         
         Si necesita ayuda, contáctenos:
-        Email: soporte@sistemapp.com
-        Teléfono: +57 300 000 0000
-        
-        © ${new Date().getFullYear()} SistemApp - Todos los derechos reservados
+        Email: soporte@fabriapp.com
+        Teléfono: +57 323 295 1780
+
+        © ${new Date().getFullYear()} FabriApp - Todos los derechos reservados
     `
 });
 
-module.exports = getWelcomeEmailTemplate; 
+module.exports = getWelcomeEmailTemplate;   

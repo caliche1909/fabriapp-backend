@@ -305,6 +305,12 @@ module.exports = function (sequelize, DataTypes) {
       foreignKey: 'user_id',
       as: 'current_position'
     });
+
+    // Relación con password_resets
+    Users.hasMany(models.password_resets, {
+      foreignKey: 'user_id',
+      as: 'password_resets'
+    });
   };
 
   return Users;
