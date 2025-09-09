@@ -6,11 +6,29 @@ const registerUserPositionHandler = require('./handlers/userPosition.handler');
 module.exports = (httpServer) => {
     const io = new Server(httpServer, {
         cors: {
-            origin: "*",
+            origin: function (origin, callback) {
+                // Permitir peticiones sin origin (aplicaciones móviles, etc.)
+                if (!origin) return callback(null, true);
+                
+                const allowedOrigins = [
+                    'http://localhost:5173',           // Desarrollo local
+                    'https://www.fabriapp.com',        // Producción principal
+                    'https://fabriapp.com',            // Producción sin www
+                    process.env.FRONTEND_URL,          // URL desde variable de entorno
+                    process.env.FRONTEND_URL_PRODUCTION // URL de producción desde env
+                ].filter(Boolean);
+                
+                if (allowedOrigins.indexOf(origin) !== -1) {
+                    callback(null, true);
+                } else {
+                    console.warn('🚫 WebSocket CORS: Origen no permitido:', origin);
+                    callback(new Error('No permitido por CORS'));
+                }
+            },
             methods: ["GET", "POST"],
             credentials: true
         },
-        path: '/ws',
+        path: '/api/socket.io', // ✅ Bajo el paraguas de /api
         allowEIO3: true
     });
 

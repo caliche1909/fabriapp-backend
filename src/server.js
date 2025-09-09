@@ -24,9 +24,30 @@ const initSockets = require('./sockets');
 
 const app = express();
 
-// Middleware
+// Middleware CORS configurado para múltiples entornos
 const corsOptions = {
-    origin: process.env.FRONTEND_URL || 'http://localhost:5173' //puerto de tu frontend local
+    origin: function (origin, callback) {
+        // Permitir peticiones sin origin (aplicaciones móviles, Postman, etc.)
+        if (!origin) return callback(null, true);
+
+        const allowedOrigins = [
+            'http://localhost:5173',           // Desarrollo local
+            'https://www.fabriapp.com',        // Producción principal
+            'https://fabriapp.com',            // Producción sin www
+            process.env.FRONTEND_URL,          // URL desde variable de entorno
+            process.env.FRONTEND_URL_PRODUCTION // URL de producción desde env
+        ].filter(Boolean); // Remover valores undefined/null
+
+        if (allowedOrigins.indexOf(origin) !== -1) {
+            callback(null, true);
+        } else {
+            console.warn('🚫 CORS: Origen no permitido:', origin);
+            callback(new Error('No permitido por CORS'));
+        }
+    },
+    credentials: true, // Permitir cookies y headers de autenticación
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
 };
 app.use(cors(corsOptions));
 
