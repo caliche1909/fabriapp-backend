@@ -53,3 +53,6 @@ Dockerfile
 # Archivos de desarrollo de Sequelize
 migrations/
 seeders/
+
+# envio de emails
+src/config/send-emails.json

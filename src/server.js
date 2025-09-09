@@ -25,7 +25,11 @@ const initSockets = require('./sockets');
 const app = express();
 
 // Middleware
-app.use(cors());
+const corsOptions = {
+    origin: process.env.FRONTEND_URL || 'http://localhost:5173' //puerto de tu frontend local
+};
+app.use(cors(corsOptions));
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true })); // Para parsear FormData
 
@@ -44,7 +48,7 @@ app.get('/health', (req, res) => {
         env: process.env.NODE_ENV || 'development',
         port: process.env.PORT || 3000
     };
-    
+
     try {
         res.status(200).json(healthcheck);
     } catch (error) {
@@ -66,7 +70,7 @@ app.get('/ready', (req, res) => {
             // redis: 'ok',     // Agregar si usas Redis, etc.
         }
     };
-    
+
     res.status(200).json(readiness);
 });
 
