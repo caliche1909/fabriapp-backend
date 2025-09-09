@@ -8,9 +8,9 @@
     "npm": ">=8.0.0"
   },
   "scripts": {
-    "start": "NODE_ENV=production node src/server.js",
-    "dev": "NODE_ENV=development nodemon src/server.js",
-    "dev:local": "NODE_ENV=development nodemon src/server.js",
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "dev:local": "nodemon src/server.js",
     "test": "echo \"Error: no test specified\" && exit 1",
     "health": "curl -f http://localhost:3000/health || exit 1",
     "docker:build": "docker build -t fabriapp-backend .",

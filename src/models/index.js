@@ -11,23 +11,41 @@ if (!process.env.JWT_SECRET && fs.existsSync(path.join(__dirname, '../../.env'))
 }
 
 const basename = path.basename(__filename);
-const env = process.env.NODE_ENV || 'development';
+
+// 🌍 Detectar entorno automáticamente
+let env = process.env.NODE_ENV;
+
+// Si no está definido, detectar por otras variables
+if (!env) {
+  if (process.env.DATABASE_URL) {
+    env = 'production';
+  } else {
+    env = 'development';
+  }
+}
+
+console.log(`🌍 Entorno detectado: ${env}`);
 
 const config = require(__dirname + '/../config/config.json')[env];
 const db = {};
 
 let sequelize;
-if (env === 'production') {
-  // 🚀 PRODUCCIÓN: Usar variables de entorno individuales de Cloud Run
-
+if (config.use_env_variable && process.env[config.use_env_variable]) {
+  // 🚀 PRODUCCIÓN: Usar DATABASE_URL de Cloud Run
+  console.log('📡 Conectando a base de datos usando DATABASE_URL...');
+  sequelize = new Sequelize(process.env[config.use_env_variable], config);
+} else if (env === 'production' && process.env.DB_HOST) {
+  // 🚀 PRODUCCIÓN: Usar variables individuales si no hay DATABASE_URL
+  console.log('📡 Conectando a base de datos usando variables individuales...');
   sequelize = new Sequelize(process.env.DB_NAME, process.env.DB_USER, process.env.DB_PASSWORD, {
     host: process.env.DB_HOST,
-    port: process.env.DB_PORT,
+    port: process.env.DB_PORT || 5432,
     dialect: config.dialect,
     dialectOptions: config.dialectOptions,
   });
 } else {
   // 🛠️ DESARROLLO: Usar configuración del config.json
+  console.log(`🔧 Conectando a base de datos local: ${config.host}:${config.port || 5432}/${config.database}`);
   sequelize = new Sequelize(config.database, config.username, config.password, config);
 }
 

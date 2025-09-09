@@ -2,12 +2,12 @@
 
 ## 📋 **SCRIPTS DISPONIBLES:**
 
-| Script | Función | Cuándo usar |
-|--------|---------|-------------|
-| `test-sequelize.js` | Backup básico con timestamp | Backup rápido general |
-| `backup-before-commit.js` | Backup con info del último commit | Después de hacer commit |
-| `backup-with-description.js` | Backup interactivo con descripción | Antes de cambios importantes |
-| `restore-backup.js` | Restaurar cualquier backup | Para restaurar BD |
+| Script                       | Función                             | Cuándo usar                  |
+|------------------------------|-------------------------------------|------------------------------|
+| `test-sequelize.js`          | Backup básico con timestamp         | Backup rápido general        |
+| `backup-before-commit.js`    | Backup con info del último commit   | Después de hacer commit      |
+| `backup-with-description.js` | Backup interactivo con descripción  | Antes de cambios importantes |
+| `restore-backup.js`          | Restaurar cualquier backup          | Para restaurar BD            |
 
 ## 🔧 **CONFIGURACIÓN REQUERIDA:**
 
