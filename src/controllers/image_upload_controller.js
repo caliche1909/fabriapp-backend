@@ -797,7 +797,7 @@ module.exports = {
         const { userId, userName, userEmail, companyName, aspect, imageType, ownerEmail, currentImagePublicId } = body;
         let cloudinaryResult = null;
 
-
+        console.log("subiendo imagen de perfil de usuario...")
 
         try {
             // 1. Validaciones iniciales
@@ -935,7 +935,7 @@ function getHeightFromAspect(aspect) {
 }
 
 // 🎯 FUNCIÓN UNIFICADA PARA SUBIR IMÁGENES A CLOUDINARY
-// Estructura: FabriApp/ownerEmail/companyName/{entityType}
+// Estructura: FabriApp/{environment}/ownerEmail/companyName/{entityType}
 async function uploadToCloudinaryUnified(buffer, {
     ownerEmail,
     companyName,
@@ -962,16 +962,32 @@ async function uploadToCloudinaryUnified(buffer, {
             .replace(/^_|_$/g, '');
     };
 
-    // Generar estructura de carpetas SIN normalizar: FabriApp/ownerEmail/companyName/{entityType}
-    const folderPath = `FabriApp/${ownerEmail}/${companyName}/${entityType}`;
+    // 🌍 DETECTAR ENTORNO AUTOMÁTICAMENTE
+    const environment = process.env.NODE_ENV || 'development';
+    const envPrefix = environment === 'production' ? 'prod' : 'dev';
+    
+    // � LOG PARA DEBUGGING
+    console.log(`🖼️ Cloudinary Upload - Environment: ${environment} (${envPrefix})`);
+    
+    // �📁 ESTRUCTURA DE CARPETAS CON SEPARACIÓN DE ENTORNOS:
+    // FabriApp/dev/ownerEmail/companyName/{entityType} (desarrollo)
+    // FabriApp/prod/ownerEmail/companyName/{entityType} (producción)
+    const folderPath = `FabriApp/${envPrefix}/${ownerEmail}/${companyName}/${entityType}`;
 
     // Generar public_id único: itemName_imageType_timestamp_hash
     const timestamp = Date.now();
     const hash = Math.random().toString(36).substring(2, 8);
     const publicId = `${normalizeForFileName(itemName)}_${imageType}_${timestamp}_${hash}`;
 
-    // Tags base + tags adicionales (normalizados para Cloudinary)
-    const baseTags = ['fabriapp', entityType.slice(0, -1), imageType, normalizeForFileName(companyName)];
+    // 🏷️ TAGS CON INFORMACIÓN DE ENTORNO
+    const baseTags = [
+        'fabriapp', 
+        entityType.slice(0, -1), 
+        imageType, 
+        normalizeForFileName(companyName),
+        environment,  // 'development' o 'production'
+        envPrefix     // 'dev' o 'prod'
+    ];
     const normalizedAdditionalTags = tags.map(tag => normalizeForFileName(tag));
     const allTags = [...baseTags, ...normalizedAdditionalTags].filter(Boolean);
 
@@ -985,7 +1001,10 @@ async function uploadToCloudinaryUnified(buffer, {
             caption: `${entityType}: ${itemName}`,
             alt: `${entityType} image`,
             uploadedBy: ownerEmail,
-            company: companyName
+            company: companyName,
+            environment: environment,           // ✨ Contexto de entorno
+            app_version: process.env.APP_VERSION || '1.0.0',
+            deployed_at: new Date().toISOString()
         },
         tags: allTags,
         transformation: transformation || [

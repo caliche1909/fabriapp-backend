@@ -31,7 +31,8 @@ const corsOptions = {
         if (!origin) return callback(null, true);
 
         const allowedOrigins = [
-            'http://localhost:5173',           // Desarrollo local
+            'http://localhost:5173',
+            'http://localhost:5174',
             'https://www.fabriapp.com',        // Producción principal
             'https://fabriapp.com',            // Producción sin www
             process.env.FRONTEND_URL,          // URL desde variable de entorno
