@@ -14,13 +14,14 @@ async function createTransporter() {
             subject: process.env.GMAIL_USER
         });
 
+        const accessToken = await auth.getAccessToken();
+
         return nodemailer.createTransport({
             service: 'gmail',
             auth: {
                 type: 'OAuth2',
                 user: process.env.GMAIL_USER,
-                // Simplemente pasa el objeto auth. Nodemailer se encargará del resto.
-                authClient: auth
+                accessToken: accessToken.token,
             }
         });
     } else {
