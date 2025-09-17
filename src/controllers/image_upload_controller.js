@@ -964,10 +964,8 @@ async function uploadToCloudinaryUnified(buffer, {
 
     // 🌍 DETECTAR ENTORNO AUTOMÁTICAMENTE
     const environment = process.env.NODE_ENV || 'development';
-    const envPrefix = environment === 'production' ? 'prod' : 'dev';
-    
-    // � LOG PARA DEBUGGING
-    console.log(`🖼️ Cloudinary Upload - Environment: ${environment} (${envPrefix})`);
+    const envPrefix = environment === 'production' ? 'prod' : 'dev';   
+   
     
     // �📁 ESTRUCTURA DE CARPETAS CON SEPARACIÓN DE ENTORNOS:
     // FabriApp/dev/ownerEmail/companyName/{entityType} (desarrollo)

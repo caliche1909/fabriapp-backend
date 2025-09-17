@@ -96,7 +96,7 @@ router.delete('/company_logo',
 );
 
 // eliminar imagen de perfil de usuario
-router.delete('/profile',
+router.delete('/delete_image_profile',
     verifyToken,
     checkPermission('delete_image_profile'),
     deleteImageLimiter, // 🔒 100 eliminaciones/15min (operación menos costosa)
