@@ -5,23 +5,32 @@ const { getWelcomeEmailTemplate, getAdminNotificationTemplate, getResetPasswordE
 require('dotenv').config();
 
 /**
- * Obtiene un token de acceso de Google.
- * Detecta automáticamente el entorno para usar la Cuenta de Servicio en producción
-* o el archivo de credenciales en desarrollo local.
-*/
-async function getAccessToken() {
-    // En producción (Cloud Run), usa la identidad de la cuenta de servicio (ADC)
+ * Crea un transporter de Nodemailer configurado OAuth2 optimizado.
+ */
+async function createTransporter() {
     if (process.env.NODE_ENV === 'production') {
+        // En producción, usa OAuth2 con configuración optimizada
         const auth = new google.auth.GoogleAuth({
             scopes: ['https://mail.google.com/'],
-            // No se necesita keyFile, ¡es automático en Cloud Run!
             subject: process.env.GMAIL_USER
         });
-        const client = await auth.getClient();
-        const accessToken = await client.getAccessToken();
-        return accessToken.token;
+        
+        return nodemailer.createTransport({
+            service: 'gmail',
+            auth: {
+                type: 'OAuth2',
+                user: process.env.GMAIL_USER,
+                // Usar el auth object directamente en lugar del token
+                googleAuth: auth,
+                accessToken: async () => {
+                    const client = await auth.getClient();
+                    const tokenResponse = await client.getAccessToken();
+                    return tokenResponse.token;
+                }
+            }
+        });
     } else {
-        // En desarrollo (local), usa el archivo de credenciales JSON
+        // En desarrollo, usa archivo de credenciales
         const keyFilePath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
         if (!keyFilePath) {
             throw new Error('La variable de entorno GOOGLE_APPLICATION_CREDENTIALS no está definida para desarrollo local.');
@@ -32,27 +41,18 @@ async function getAccessToken() {
             scopes: ['https://mail.google.com/'],
             subject: process.env.GMAIL_USER
         });
+        
         const accessToken = await auth.getAccessToken();
-        return accessToken.token;
+        
+        return nodemailer.createTransport({
+            service: 'gmail',
+            auth: {
+                type: 'OAuth2',
+                user: process.env.GMAIL_USER,
+                accessToken: accessToken.token,
+            }
+        });
     }
-}
-
-/**
- * Crea un transporter de Nodemailer configurado con un token de acceso fresco.
- */
-async function createTransporter() {
-    const accessToken = await getAccessToken();
-
-    return nodemailer.createTransport({
-        host: 'smtp.gmail.com',
-        port: 465,
-        secure: true,
-        auth: {
-            type: 'OAuth2',
-            user: process.env.GMAIL_USER,
-            accessToken: accessToken,
-        }
-    });
 }
 
 // --- Las funciones de envío de correo permanecen igual, pero ahora usarán el nuevo createTransporter ---
