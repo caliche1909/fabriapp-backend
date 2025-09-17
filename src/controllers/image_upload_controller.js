@@ -39,16 +39,7 @@ module.exports = {
                     status: 400,
                     message: 'Falta la llave de eliminacion de la imagen'
                 });
-            }
-
-            // ✅ PASO 4: validar que el id que llega es el mismo que el del usuario en el req.user
-            if (userId !== req.user?.id) {
-                return res.status(403).json({
-                    success: false,
-                    status: 403,
-                    message: 'Acceso denegado para eliminar la imagen de este usuario'
-                });
-            }
+            }            
 
             // ✅ PASO 5: Iniciar transacción
             const transaction = await sequelize.transaction();
@@ -964,9 +955,9 @@ async function uploadToCloudinaryUnified(buffer, {
 
     // 🌍 DETECTAR ENTORNO AUTOMÁTICAMENTE
     const environment = process.env.NODE_ENV || 'development';
-    const envPrefix = environment === 'production' ? 'prod' : 'dev';   
-   
-    
+    const envPrefix = environment === 'production' ? 'prod' : 'dev';
+
+
     // �📁 ESTRUCTURA DE CARPETAS CON SEPARACIÓN DE ENTORNOS:
     // FabriApp/dev/ownerEmail/companyName/{entityType} (desarrollo)
     // FabriApp/prod/ownerEmail/companyName/{entityType} (producción)
@@ -979,9 +970,9 @@ async function uploadToCloudinaryUnified(buffer, {
 
     // 🏷️ TAGS CON INFORMACIÓN DE ENTORNO
     const baseTags = [
-        'fabriapp', 
-        entityType.slice(0, -1), 
-        imageType, 
+        'fabriapp',
+        entityType.slice(0, -1),
+        imageType,
         normalizeForFileName(companyName),
         environment,  // 'development' o 'production'
         envPrefix     // 'dev' o 'prod'
