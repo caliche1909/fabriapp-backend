@@ -9,24 +9,18 @@ require('dotenv').config();
  */
 async function createTransporter() {
     if (process.env.NODE_ENV === 'production') {
-        // En producción, usa OAuth2 con configuración optimizada
         const auth = new google.auth.GoogleAuth({
             scopes: ['https://mail.google.com/'],
             subject: process.env.GMAIL_USER
         });
-        
+
         return nodemailer.createTransport({
             service: 'gmail',
             auth: {
                 type: 'OAuth2',
                 user: process.env.GMAIL_USER,
-                // Usar el auth object directamente en lugar del token
-                googleAuth: auth,
-                accessToken: async () => {
-                    const client = await auth.getClient();
-                    const tokenResponse = await client.getAccessToken();
-                    return tokenResponse.token;
-                }
+                // Simplemente pasa el objeto auth. Nodemailer se encargará del resto.
+                authClient: auth
             }
         });
     } else {
@@ -41,9 +35,9 @@ async function createTransporter() {
             scopes: ['https://mail.google.com/'],
             subject: process.env.GMAIL_USER
         });
-        
+
         const accessToken = await auth.getAccessToken();
-        
+
         return nodemailer.createTransport({
             service: 'gmail',
             auth: {
