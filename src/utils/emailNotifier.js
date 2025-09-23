@@ -1,52 +1,31 @@
 const nodemailer = require('nodemailer');
-const path = require('path');
-const { google } = require('googleapis');
 const { getWelcomeEmailTemplate, getAdminNotificationTemplate, getResetPasswordEmailTemplate } = require('./email');
 require('dotenv').config();
 
 /**
- * Crea un transporter de Nodemailer configurado OAuth2 optimizado.
+ * Crea un transporter de Nodemailer configurado con App Password.
  */
 async function createTransporter() {
-    if (process.env.NODE_ENV === 'production') {
-        const auth = new google.auth.GoogleAuth({
-            scopes: ['https://mail.google.com/'],
-            subject: process.env.GMAIL_USER
-        });
-
-        const accessToken = await auth.getAccessToken();
-
-        return nodemailer.createTransport({
-            service: 'gmail',
-            auth: {
-                type: 'OAuth2',
-                user: process.env.GMAIL_USER,
-                accessToken: accessToken.token,
-            }
-        });
-    } else {
-        // En desarrollo, usa archivo de credenciales
-        const keyFilePath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
-        if (!keyFilePath) {
-            throw new Error('La variable de entorno GOOGLE_APPLICATION_CREDENTIALS no está definida para desarrollo local.');
+    try {
+        // Verificar variables de entorno requeridas
+        if (!process.env.GMAIL_USER) {
+            throw new Error('GMAIL_USER no está definido en las variables de entorno');
         }
-        const absoluteCredentialsPath = path.resolve(keyFilePath);
-        const auth = new google.auth.JWT({
-            keyFile: absoluteCredentialsPath,
-            scopes: ['https://mail.google.com/'],
-            subject: process.env.GMAIL_USER
-        });
-
-        const accessToken = await auth.getAccessToken();
+        
+        if (!process.env.GMAIL_APP_PASSWORD) {
+            throw new Error('GMAIL_APP_PASSWORD no está definido en las variables de entorno');
+        }
 
         return nodemailer.createTransport({
             service: 'gmail',
             auth: {
-                type: 'OAuth2',
                 user: process.env.GMAIL_USER,
-                accessToken: accessToken.token,
+                pass: process.env.GMAIL_APP_PASSWORD
             }
         });
+    } catch (error) {
+        console.error('❌ Error al crear transporter:', error);
+        throw error;
     }
 }
 
@@ -92,6 +71,7 @@ async function sendWelcomeEmail(userData) {
 
 async function sendPasswordResetEmail(userData, resetToken) {
     try {
+        console.log('🔧 Iniciando envío de email de recuperación...');
         const transporter = await createTransporter();
 
         // Simplificado: FRONTEND_URL se configura de forma diferente en cada ambiente
@@ -104,6 +84,7 @@ async function sendPasswordResetEmail(userData, resetToken) {
         const resetLink = `${frontendUrl}/empresa/reset-password?token=${resetToken}`;
         const expirationTime = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 horas       
 
+        console.log('📧 Configurando template de email...');
         const template = getResetPasswordEmailTemplate(userData, resetLink, expirationTime);
 
         const mailOptions = {
@@ -114,10 +95,13 @@ async function sendPasswordResetEmail(userData, resetToken) {
             text: template.text
         };
 
+        console.log('📤 Enviando email a:', userData.email);
         await transporter.sendMail(mailOptions);
+        console.log('✅ Email enviado exitosamente');
         return true;
     } catch (error) {
         console.error('❌ Error al enviar email de recuperación:', error);
+        console.error('❌ Error stack:', error.stack);
         return false;
     }
 }
