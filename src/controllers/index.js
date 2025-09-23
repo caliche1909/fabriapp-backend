@@ -13,6 +13,7 @@ const register_company_and_userController = require('./register_company_and_user
 const companyController = require('./company_controller');
 const rolesController = require('./roles_controller');
 const authController = require('./auth_controller');
+const geocodingController = require('./geocoding_controller');
 
 module.exports = {
     userController,
@@ -29,6 +30,6 @@ module.exports = {
     register_company_and_userController,
     companyController,
     rolesController,
-    authController
-
+    authController,
+    geocodingController
 };

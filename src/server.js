@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 
-//immportacion de rutas 
+//importacion de rutas 
 const authRoutes = require('./routes/authRoutes');
 const userRoutes = require('./routes/userRoutes');
 const measurementUnitsRoutes = require('./routes/measurementUnitsRoutes');
@@ -19,6 +19,7 @@ const companyRoutes = require('./routes/companyRoutes');
 const userGeolocationRoutes = require('./routes/userGeolocationRoutes');
 const rolesRoutes = require('./routes/rolesRoutes');
 const modulesRoutes = require('./routes/modulesRoutes');
+const geocodingRoutes = require('./routes/geocodingRoutes');
 const http = require('http');
 const initSockets = require('./sockets');
 
@@ -113,6 +114,7 @@ app.use('/api/company', companyRoutes);
 app.use('/api/users/geolocation', userGeolocationRoutes);
 app.use('/api/roles', rolesRoutes);
 app.use('/api/modules', modulesRoutes);
+app.use('/api/geocoding', geocodingRoutes);
 
 // Puerto del servidor
 const PORT = process.env.PORT || 3000;

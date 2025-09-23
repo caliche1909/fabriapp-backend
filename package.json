@@ -33,6 +33,7 @@
     "sequelize-cli": "^6.6.2"
   },
   "dependencies": {
+    "@google-cloud/secret-manager": "^6.1.0",
     "bcrypt": "^5.1.1",
     "cloudinary": "^2.6.1",
     "cors": "^2.8.5",
