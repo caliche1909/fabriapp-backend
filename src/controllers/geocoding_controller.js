@@ -23,9 +23,6 @@ module.exports = {
                 });
             }
 
-            console.log('🔧 [GEOCODING BACKEND] API Key configurada correctamente');
-            console.log('🔧 [GEOCODING BACKEND] Coordenadas:', { lat, lng });
-
             const apiKey = process.env.GOOGLE_MAPS_API_KEY;
             const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${apiKey}&language=es&region=CO`;
 
