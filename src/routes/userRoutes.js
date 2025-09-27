@@ -120,7 +120,7 @@ router.get('/company/:company_id',
 // Obtener usuarios con geolocalización para mapa en tiempo real
 router.get('/company/:company_id/geolocation',
     verifyToken,
-    checkPermission('view_users'),
+    checkPermission('view_user_ubication'),
     getSellersLimiter, // Mismo limitador que otras consultas de usuarios
     userController.getUsersWithGeolocation
 );
