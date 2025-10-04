@@ -61,16 +61,6 @@ module.exports = function (sequelize, DataTypes) {
           msg: "El origen de actualización debe ser uno de: mobile_app, web, system_activation, system_reactivation, api, background_service"
         }
       }
-    },
-    created_at: {
-      type: DataTypes.DATE,
-      allowNull: false,
-      defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
-    },
-    updated_at: {
-      type: DataTypes.DATE,
-      allowNull: false,
-      defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
     }
   }, {
     sequelize,

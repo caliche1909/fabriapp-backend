@@ -117,15 +117,14 @@ module.exports = function (sequelize, DataTypes) {
         }
       }
     },
-    created_at: {
-      type: DataTypes.DATE,
-      allowNull: false,
-      defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
-    },
-    updated_at: {
-      type: DataTypes.DATE,
-      allowNull: false,
-      defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
+    current_visit_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: 'store_visits',
+        key: 'id'
+      },
+      comment: 'ID de la visita actual (si está visitada)'
     }
   }, {
     sequelize,
@@ -200,46 +199,46 @@ module.exports = function (sequelize, DataTypes) {
     ]
   });
 
-  Stores.prototype.setUbicacion = function(lat, lng) {
-    return sequelize.fn('ST_SetSRID', 
-      sequelize.fn('ST_MakePoint', lng, lat), 
+  Stores.prototype.setUbicacion = function (lat, lng) {
+    return sequelize.fn('ST_SetSRID',
+      sequelize.fn('ST_MakePoint', lng, lat),
       4326
     );
   };
 
-  Stores.prototype.getLatitud = function() {
+  Stores.prototype.getLatitud = function () {
     if (this.ubicacion) {
       return sequelize.fn('ST_Y', this.ubicacion);
     }
     return null;
   };
 
-  Stores.prototype.getLongitud = function() {
+  Stores.prototype.getLongitud = function () {
     if (this.ubicacion) {
       return sequelize.fn('ST_X', this.ubicacion);
     }
     return null;
   };
 
-  Stores.findByProximity = function(lat, lng, radiusKm = 5) {
-    const punto = sequelize.fn('ST_SetSRID', 
-      sequelize.fn('ST_MakePoint', lng, lat), 
+  Stores.findByProximity = function (lat, lng, radiusKm = 5) {
+    const punto = sequelize.fn('ST_SetSRID',
+      sequelize.fn('ST_MakePoint', lng, lat),
       4326
     );
-    
+
     return this.findAll({
       where: sequelize.where(
-        sequelize.fn('ST_DWithin', 
-          sequelize.col('ubicacion'), 
-          punto, 
+        sequelize.fn('ST_DWithin',
+          sequelize.col('ubicacion'),
+          punto,
           radiusKm / 111.32
-        ), 
+        ),
         true
       ),
       attributes: {
         include: [
-          [sequelize.fn('ST_Distance', 
-            sequelize.col('ubicacion'), 
+          [sequelize.fn('ST_Distance',
+            sequelize.col('ubicacion'),
             punto
           ) * 111320, 'distancia_metros']
         ]
@@ -249,7 +248,7 @@ module.exports = function (sequelize, DataTypes) {
   };
 
   // Método para resetear todas las tiendas de una ruta a 'pending'
-  Stores.resetRouteVisits = async function(routeId) {
+  Stores.resetRouteVisits = async function (routeId) {
     try {
       const result = await sequelize.query(
         'SELECT reset_route_visits($1) as result',
@@ -264,7 +263,7 @@ module.exports = function (sequelize, DataTypes) {
       console.error('Error al resetear visitas de ruta:', error);
       throw error;
     }
-  }; 
+  };
 
   Stores.associate = (models) => {
     Stores.belongsTo(models.companies, {
@@ -290,6 +289,14 @@ module.exports = function (sequelize, DataTypes) {
     Stores.hasMany(models.store_images, {
       foreignKey: 'store_id',
       as: 'images'
+    });
+
+    // 🚫 Relación con StoreNoSaleReports - Una tienda puede tener muchos reportes de no-venta
+    Stores.hasMany(models.store_no_sale_reports, {
+      foreignKey: 'store_id',
+      as: 'no_sale_reports',
+      onDelete: 'RESTRICT', // No se puede eliminar una tienda con reportes
+      onUpdate: 'CASCADE'
     });
   };
 

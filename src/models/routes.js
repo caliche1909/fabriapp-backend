@@ -47,16 +47,6 @@ module.exports = function (sequelize, DataTypes) {
       ),
       allowNull: true
     },
-    created_at: {
-      type: DataTypes.DATE,
-      allowNull: false,
-      defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
-    },
-    updated_at: {
-      type: DataTypes.DATE,
-      allowNull: false,
-      defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
-    }
   }, {
     sequelize,
     tableName: 'routes',
@@ -116,6 +106,14 @@ module.exports = function (sequelize, DataTypes) {
     Routes.hasMany(models.stores, {
       foreignKey: "route_id",
       as: "stores"
+    });
+
+    // 📊 Relación con StoreNoSaleReports - Una ruta puede tener muchos reportes de no-venta
+    Routes.hasMany(models.store_no_sale_reports, {
+      foreignKey: 'route_id',
+      as: 'no_sale_reports',
+      onDelete: 'SET NULL', // Si se elimina la ruta, el campo se pone NULL
+      onUpdate: 'CASCADE'
     });
   };
 

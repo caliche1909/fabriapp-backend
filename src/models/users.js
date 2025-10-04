@@ -127,16 +127,6 @@ module.exports = function (sequelize, DataTypes) {
     last_login: {
       type: DataTypes.DATE,
       allowNull: true
-    },
-    created_at: {
-      type: DataTypes.DATE,
-      allowNull: false,
-      defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
-    },
-    updated_at: {
-      type: DataTypes.DATE,
-      allowNull: false,
-      defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
     }
   }, {
     sequelize,
@@ -249,9 +239,9 @@ module.exports = function (sequelize, DataTypes) {
   };
 
   // Método para obtener todas las compañías del usuario (propias y asignadas)
-  Users.prototype.getAllCompanies = async function() {
+  Users.prototype.getAllCompanies = async function () {
     const userCompaniesData = await sequelize.models.user_companies.findAll({
-      where: { 
+      where: {
         user_id: this.id,
         status: 'active'
       },
@@ -310,6 +300,14 @@ module.exports = function (sequelize, DataTypes) {
     Users.hasMany(models.password_resets, {
       foreignKey: 'user_id',
       as: 'password_resets'
+    });
+
+    // 📊 Relación con StoreNoSaleReports - Un usuario puede crear muchos reportes de no-venta
+    Users.hasMany(models.store_no_sale_reports, {
+      foreignKey: 'user_id',
+      as: 'no_sale_reports',
+      onDelete: 'RESTRICT', // No se puede eliminar un usuario con reportes
+      onUpdate: 'CASCADE'
     });
   };
 

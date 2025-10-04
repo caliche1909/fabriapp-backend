@@ -257,7 +257,7 @@ module.exports = {
         } catch (error) {
             // 🚨 Rollback en caso de error
             await transaction.rollback();
-            
+
             // 🔍 Manejo específico de errores de restricción única
             if (error.name === 'SequelizeUniqueConstraintError') {
                 if (error.original && error.original.constraint) {
@@ -687,7 +687,8 @@ module.exports = {
                     'city',
                     'state',
                     'country',
-                    'current_visit_status'
+                    'current_visit_status',
+                    'current_visit_id' // 🆕 Incluir visit_id persistente
                 ],
                 include: [
                     {
@@ -895,7 +896,7 @@ module.exports = {
 
     // 📌 Método para eliminar una tienda 
     async deleteStore(req, res) {
-        
+
         try {
             const { id } = req.params;
 
@@ -1037,52 +1038,47 @@ module.exports = {
 
     // 📌 Método para actualizar una tienda como visitada
     async updateStoreAsVisited(req, res) {
-        let route_id = null;
         let transaction = null;
         try {
             const { store_id } = req.params;
-            const { date, distance } = req.body;
+            const { distance } = req.body;
             const user_id = req.user.id;
 
-            // 🔍 VALIDAR DATOS REQUERIDOS ANTES DE INICIAR TRANSACCIÓN
-            if (!store_id) {
+            // 🔍 VALIDACIONES (optimizadas y concisas)
+            if (!store_id || !distance) {
                 return res.status(400).json({
                     success: false,
                     status: 400,
-                    message: 'El identificador de la tienda es requerido'
+                    message: !store_id ? 'No se identifica la tienda' : 'Distancia requerida'
                 });
             }
 
-            if (!date || !distance) {
-                return res.status(400).json({
-                    success: false,
-                    status: 400,
-                    message: 'La fecha y distancia de la visita son requeridas'
-                });
-            }
-
-            // Validar que la distancia sea un número válido
             const parsedDistance = parseFloat(distance);
             if (isNaN(parsedDistance) || parsedDistance < 0) {
                 return res.status(400).json({
                     success: false,
                     status: 400,
-                    message: 'La distancia debe ser un número válido mayor o igual a 0'
+                    message: 'Distancia debe ser número válido ≥ 0'
                 });
             }
 
-            // Validar que la fecha sea válida
-            const visitDate = new Date(date);
-            if (isNaN(visitDate.getTime())) {
+            // 📍 Distancia configurable por environment (más realista)
+            const MAX_VISIT_DISTANCE = parseInt(process.env.MAX_VISIT_DISTANCE) || 300;
+            if (parsedDistance > MAX_VISIT_DISTANCE) {
                 return res.status(400).json({
                     success: false,
                     status: 400,
-                    message: 'La fecha proporcionada no es válida'
+                    message: "Debes estar en la ubicación de la tienda para registrarla como visitada."
                 });
             }
 
-            // Buscar la tienda
-            const store = await stores.findByPk(parseInt(store_id));
+            // 🔍 Buscar tienda con datos completos (una sola consulta optimizada)
+            const store = await stores.findByPk(parseInt(store_id), {
+                include: [                 
+                    { model: stores.sequelize.models.routes, as: 'route', attributes: ['name'] }
+                ]
+            });
+            
             if (!store) {
                 return res.status(404).json({
                     success: false,
@@ -1091,65 +1087,87 @@ module.exports = {
                 });
             }
 
-            route_id = store.route_id;
+            // 🚫 Validar visita duplicada HOY (UTC correcto con Date.UTC explícito)
+            const startOfTodayUTC = new Date(Date.UTC(
+                new Date().getUTCFullYear(),
+                new Date().getUTCMonth(),
+                new Date().getUTCDate(),
+                0, 0, 0, 0
+            ));
 
-            // Comenzamos la transacción
-            transaction = await stores.sequelize.transaction();
+            const endOfTodayUTC = new Date(Date.UTC(
+                new Date().getUTCFullYear(),
+                new Date().getUTCMonth(),
+                new Date().getUTCDate(),
+                23, 59, 59, 999
+            ));
 
-            // 🔍 Obtener información completa para desnormalización
-            const fullStore = await stores.findByPk(store.id, {
-                include: [
-                    { model: users, as: 'manager', attributes: ['first_name', 'last_name'] },
-                    { model: stores.sequelize.models.routes, as: 'route', attributes: ['name'] }
-                ],
-                transaction
+            const existingVisitToday = await store_visits.findOne({
+                where: {
+                    store_id: parseInt(store_id),
+                    user_id: user_id,
+                    date: {
+                        [Op.between]: [startOfTodayUTC, endOfTodayUTC]
+                    }
+                }
             });
 
+            if (existingVisitToday) {
+                return res.status(409).json({
+                    success: false,
+                    status: 409,
+                    message: 'Esta tienda ya fue visitada hoy',
+                });
+            }
+
+            // Iniciar transacción
+            transaction = await stores.sequelize.transaction();
+
+            // 🔍 Obtener datos del usuario para desnormalización
             const currentUser = await users.findByPk(user_id, {
                 attributes: ['first_name', 'last_name'],
                 transaction
             });
 
-            // Actualizar el estado de visita de la tienda
-            store.current_visit_status = 'visited';
-            await store.save({ transaction });
-
-            // 📦 Registrar la visita con información desnormalizada para análisis histórico
+            // ✅ CORRECTO: No envías 'date' - la BD usa DEFAULT CURRENT_TIMESTAMP
+            // Usar directamente 'store' que ya tiene todos los datos necesarios
             const visitRecord = await store_visits.create({
                 user_id,
                 store_id: store.id,
-                route_id,
-                date: visitDate, // Usar la fecha ya validada
-                distance: parsedDistance, // Usar la distancia ya validada        
+                route_id: store.route_id,
+                distance: parsedDistance,
                 user_name: currentUser ? `${currentUser.first_name} ${currentUser.last_name}`.trim() : null,
-                store_name: fullStore.name,
-                store_address: fullStore.address,
-                route_name: fullStore.route ? fullStore.route.name : null,
-                sale_amount: 0.00 // Por defecto, se puede actualizar luego cuando se registre una venta
+                store_name: store.name, // ✅ Usar store directamente
+                store_address: store.address, // ✅ Usar store directamente
+                route_name: store.route ? store.route.name : null, // ✅ Usar store.route
+                sale_amount: 0.00
             }, { transaction });
 
+            // 🆕 Actualizar estado Y visit_id de la tienda (solución definitiva)
+            store.current_visit_status = 'visited';
+            store.current_visit_id = visitRecord.id;
+            await store.save({ transaction });
 
-            // Confirmar la transacción
             await transaction.commit();
 
             res.status(200).json({
                 success: true,
                 status: 200,
-                message: 'Estado de visita actualizado exitosamente',
-                store_visit_id: visitRecord.id
+                message: 'Tienda marcada como visitada exitosamente',
+                store_visit_id: visitRecord.id               
             });
 
         } catch (error) {
-
-
-            // Si hay un error, revertir la transacción
-            if (transaction) {
+            // ✅ ROLLBACK MEJORADO - verifica si la transacción ya finalizó
+            if (transaction && !transaction.finished) {
                 await transaction.rollback();
             }
 
+            console.error('Error en updateStoreAsVisited:', error);
+            
             res.status(500).json({
                 success: false,
-                message: 'Error interno del servidor al actualizar el estado de visita',
+                message: 'Error interno del servidor al registrar visita',
                 error: process.env.NODE_ENV === 'development' ? error.message : undefined
             });
         }
@@ -1167,16 +1185,19 @@ module.exports = {
                 });
             }
 
-            // Actualizar todas las tiendas de la ruta a 'pending'
+            // 🔄 Actualizar todas las tiendas de la ruta a 'pending' y limpiar visit_id
             const [updatedRows] = await stores.update(
-                { current_visit_status: 'pending' },
+                { 
+                    current_visit_status: 'pending',
+                    current_visit_id: null // 🆕 Limpiar visit_id para permitir nuevas visitas
+                },
                 {
                     where: { route_id: parseInt(route_id) },
                     returning: false
                 }
             );
 
-           
+
 
             res.status(200).json({
                 success: true,

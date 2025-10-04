@@ -102,16 +102,6 @@ module.exports = function (sequelize, DataTypes) {
         }
       },
       comment: "Valor de la venta realizada en esta visita (0 = solo visita sin venta)"
-    },
-    created_at: {
-      type: DataTypes.DATE,
-      allowNull: false,
-      defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
-    },
-    updated_at: {
-      type: DataTypes.DATE,
-      allowNull: false,
-      defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
     }
   }, {
     sequelize,
@@ -192,6 +182,14 @@ module.exports = function (sequelize, DataTypes) {
     StoreVisits.belongsTo(models.routes, {
       foreignKey: 'route_id',
       as: 'route'
+    });
+
+    // 📊 Relación con StoreNoSaleReports - Una visita puede tener UN reporte de no-venta (opcional)
+    StoreVisits.hasOne(models.store_no_sale_reports, {
+      foreignKey: 'visit_id',
+      as: 'no_sale_report',
+      onDelete: 'SET NULL', // Si se elimina la visita, el campo se pone NULL
+      onUpdate: 'CASCADE'
     });
   };
 

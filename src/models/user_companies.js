@@ -83,16 +83,6 @@ module.exports = function (sequelize, DataTypes) {
           msg: "El estado debe ser 'active', 'inactive' o 'suspended'"
         }
       }
-    },
-    created_at: {
-      type: DataTypes.DATE,
-      allowNull: false,
-      defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
-    },
-    updated_at: {
-      type: DataTypes.DATE,
-      allowNull: false,
-      defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
     }
   }, {
     sequelize,
@@ -164,8 +154,8 @@ module.exports = function (sequelize, DataTypes) {
       // Establecer todas las otras empresas del usuario como no predeterminadas
       await UserCompany.update(
         { is_default: false },
-        { 
-          where: { 
+        {
+          where: {
             user_id: this.user_id,
             id: { [sequelize.Sequelize.Op.ne]: this.id }
           },

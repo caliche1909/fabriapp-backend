@@ -45,7 +45,7 @@ module.exports = function (sequelize, DataTypes) {
         async isValidCompanyRole(value) {
           const role = await sequelize.models.roles.findByPk(this.role_id);
           if (!role) throw new Error('Rol no encontrado');
-          
+
           if (role.is_global && value !== null) {
             throw new Error('Los roles globales no pueden tener una compañía asignada');
           }
@@ -54,16 +54,6 @@ module.exports = function (sequelize, DataTypes) {
           }
         }
       }
-    },
-    created_at: {
-      type: DataTypes.DATE,
-      allowNull: false,
-      defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
-    },
-    updated_at: {
-      type: DataTypes.DATE,
-      allowNull: false,
-      defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
     }
   }, {
     sequelize,

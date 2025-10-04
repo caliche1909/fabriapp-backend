@@ -148,16 +148,6 @@ module.exports = function (sequelize, DataTypes) {
             type: DataTypes.BOOLEAN,
             allowNull: false,
             defaultValue: true
-        },
-        created_at: {
-            type: DataTypes.DATE,
-            allowNull: false,
-            defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
-        },
-        updated_at: {
-            type: DataTypes.DATE,
-            allowNull: false,
-            defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
         }
     }, {
         sequelize,
@@ -335,6 +325,26 @@ module.exports = function (sequelize, DataTypes) {
         Company.hasMany(models.user_companies, {
             foreignKey: 'company_id',
             as: 'user_assignments'
+        });
+
+        // Relación con no_sale_categories (una empresa puede tener muchas categorías específicas)
+        Company.hasMany(models.no_sale_categories, {
+            foreignKey: 'company_id',
+            as: 'no_sale_categories'
+        });
+
+        // Relación con no_sale_reasons (una empresa puede tener muchos motivos específicos)
+        Company.hasMany(models.no_sale_reasons, {
+            foreignKey: 'company_id',
+            as: 'no_sale_reasons'
+        });
+
+        // 📊 Relación con StoreNoSaleReports - Una compañía puede tener muchos reportes de no-venta
+        Company.hasMany(models.store_no_sale_reports, {
+            foreignKey: 'company_id',
+            as: 'store_no_sale_reports',
+            onDelete: 'RESTRICT', // No se puede eliminar una compañía con reportes
+            onUpdate: 'CASCADE'
         });
     };
 

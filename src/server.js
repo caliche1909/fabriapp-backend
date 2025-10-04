@@ -20,6 +20,8 @@ const userGeolocationRoutes = require('./routes/userGeolocationRoutes');
 const rolesRoutes = require('./routes/rolesRoutes');
 const modulesRoutes = require('./routes/modulesRoutes');
 const geocodingRoutes = require('./routes/geocodingRoutes');
+const storeNoSaleReportsRoutes = require('./routes/store_no_sale_reports_routes');
+const noSaleCategoriesRoutes = require('./routes/no_sale_categories_routes');
 const http = require('http');
 const initSockets = require('./sockets');
 
@@ -115,6 +117,8 @@ app.use('/api/users/geolocation', userGeolocationRoutes);
 app.use('/api/roles', rolesRoutes);
 app.use('/api/modules', modulesRoutes);
 app.use('/api/geocoding', geocodingRoutes);
+app.use('/api/store_no_sale_reports', storeNoSaleReportsRoutes);
+app.use('/api/no_sale_categories', noSaleCategoriesRoutes);
 
 // Puerto del servidor
 const PORT = process.env.PORT || 3000;

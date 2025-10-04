@@ -19,6 +19,10 @@ var _supplier_companies = require("./supplier_companies");
 var _supplier_verifications = require("./supplier_verifications");
 var _supplies_stock = require("./supplies_stock");
 var _inventory_supplies_balance = require("./inventory_supplies_balance"); // 📌 Agregado
+var _no_sale_categories = require("./no_sale_categories"); // 📌 Nuevo modelo agregado
+var _no_sale_reasons = require("./no_sale_reasons"); // 📌 Nuevo modelo agregado
+var _store_no_sale_reports = require("./store_no_sale_reports"); // 📌 Nuevo modelo agregado
+var _store_visits = require("./store_visits");
 var _user_current_position = require("./user_current_position");
 var _users = require("./users");
 var _work_areas = require("./work_areas");
@@ -44,6 +48,10 @@ function initModels(sequelize) {
   var supplier_verifications = _supplier_verifications(sequelize, DataTypes);
   var supplies_stock = _supplies_stock(sequelize, DataTypes);
   var inventory_supplies_balance = _inventory_supplies_balance(sequelize, DataTypes); // 📌 Agregado
+  var no_sale_categories = _no_sale_categories(sequelize, DataTypes); // 📌 Nuevo modelo agregado
+  var no_sale_reasons = _no_sale_reasons(sequelize, DataTypes); // 📌 Nuevo modelo agregado
+  var store_no_sale_reports = _store_no_sale_reports(sequelize, DataTypes); // 📌 Nuevo modelo agregado
+  var store_visits = _store_visits(sequelize, DataTypes);
   var user_current_position = _user_current_position(sequelize, DataTypes);
   var users = _users(sequelize, DataTypes);
   var work_areas = _work_areas(sequelize, DataTypes);
@@ -120,6 +128,50 @@ function initModels(sequelize) {
   password_resets.belongsTo(users, { as: "user", foreignKey: "user_id", onDelete: "CASCADE" });
   users.hasMany(password_resets, { as: "password_resets", foreignKey: "user_id", onDelete: "CASCADE" });
 
+  // ✅ Relaciones para no_sale_categories
+  no_sale_categories.belongsTo(companies, { as: "company", foreignKey: "company_id" });
+  companies.hasMany(no_sale_categories, { as: "no_sale_categories", foreignKey: "company_id" });
+
+  // ✅ Relaciones para no_sale_reasons
+  no_sale_reasons.belongsTo(no_sale_categories, { as: "category", foreignKey: "category_id" });
+  no_sale_categories.hasMany(no_sale_reasons, { as: "reasons", foreignKey: "category_id" });
+
+  no_sale_reasons.belongsTo(companies, { as: "company", foreignKey: "company_id" });
+  companies.hasMany(no_sale_reasons, { as: "no_sale_reasons", foreignKey: "company_id" });
+
+  // ✅ Relaciones para store_no_sale_reports
+  store_no_sale_reports.belongsTo(stores, { as: "store", foreignKey: "store_id" });
+  stores.hasMany(store_no_sale_reports, { as: "no_sale_reports", foreignKey: "store_id" });
+
+  store_no_sale_reports.belongsTo(users, { as: "user", foreignKey: "user_id" });
+  users.hasMany(store_no_sale_reports, { as: "no_sale_reports", foreignKey: "user_id" });
+
+  store_no_sale_reports.belongsTo(routes, { as: "route", foreignKey: "route_id" });
+  routes.hasMany(store_no_sale_reports, { as: "no_sale_reports", foreignKey: "route_id" });
+
+  store_no_sale_reports.belongsTo(companies, { as: "company", foreignKey: "company_id" });
+  companies.hasMany(store_no_sale_reports, { as: "store_no_sale_reports", foreignKey: "company_id" });
+
+  store_no_sale_reports.belongsTo(no_sale_categories, { as: "category", foreignKey: "category_id" });
+  no_sale_categories.hasMany(store_no_sale_reports, { as: "reports", foreignKey: "category_id" });
+
+  store_no_sale_reports.belongsTo(no_sale_reasons, { as: "reason", foreignKey: "reason_id" });
+  no_sale_reasons.hasMany(store_no_sale_reports, { as: "reports", foreignKey: "reason_id" });
+
+  // Relación opcional con store_visits
+  store_no_sale_reports.belongsTo(store_visits, { as: "visit", foreignKey: "visit_id" });
+  store_visits.hasOne(store_no_sale_reports, { as: "no_sale_report", foreignKey: "visit_id" });
+
+  // ✅ Relaciones para store_visits
+  store_visits.belongsTo(users, { as: "user", foreignKey: "user_id" });
+  users.hasMany(store_visits, { as: "store_visits", foreignKey: "user_id" });
+
+  store_visits.belongsTo(stores, { as: "store", foreignKey: "store_id" });
+  stores.hasMany(store_visits, { as: "visits", foreignKey: "store_id" });
+
+  store_visits.belongsTo(routes, { as: "route", foreignKey: "route_id" });
+  routes.hasMany(store_visits, { as: "visits", foreignKey: "route_id" });
+
   return {
     SequelizeMeta,
     companies,
@@ -141,6 +193,10 @@ function initModels(sequelize) {
     supplier_verifications,
     supplies_stock,
     inventory_supplies_balance,
+    no_sale_categories,
+    no_sale_reasons,
+    store_no_sale_reports,
+    store_visits,
     user_current_position,
     users,
     work_areas,

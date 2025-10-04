@@ -98,25 +98,14 @@ module.exports = (sequelize, DataTypes) => {
         model: 'users',
         key: 'id'
       }
-    },
-    created_at: {
-      type: DataTypes.DATE,
-      allowNull: false,
-      defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
-    },
-    updated_at: {
-      type: DataTypes.DATE,
-      allowNull: false,
-      defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
     }
-
   }, {
     sequelize,
     tableName: 'store_images',
     timestamps: true,
     createdAt: 'created_at',
     updatedAt: 'updated_at',
-    paranoid: false, // Habilita borrado lógico   
+    paranoid: false, // desabilita borrado lógico   
     underscored: true,
     freezeTableName: true,
     schema: 'public',

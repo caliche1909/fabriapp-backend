@@ -61,16 +61,6 @@ module.exports = function (sequelize, DataTypes) {
         }
       }
     },
-    created_at: {
-      type: DataTypes.DATE,
-      allowNull: false,
-      defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
-    },
-    updated_at: {
-      type: DataTypes.DATE,
-      allowNull: false,
-      defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
-    },
     is_active: {
       type: DataTypes.BOOLEAN,
       allowNull: false,
@@ -106,7 +96,7 @@ module.exports = function (sequelize, DataTypes) {
             throw new Error('No se puede modificar el estado global de un rol global');
           }
         }
-        
+
         // Normalizar name y label antes de actualizar (solo para roles no globales)
         if (!oldRole.is_global) {
           if (role.name) {
@@ -160,7 +150,7 @@ module.exports = function (sequelize, DataTypes) {
   });
 
   // Métodos estáticos para normalización
-  Role.normalizeName = function(roleName) {
+  Role.normalizeName = function (roleName) {
     // Convertir a mayúsculas, quitar espacios y reemplazar espacios con guiones bajos
     return roleName
       .trim()                    // Quitar espacios al inicio y final
@@ -168,14 +158,14 @@ module.exports = function (sequelize, DataTypes) {
       .replace(/\s+/g, '_');     // Reemplazar espacios con guion bajo
   };
 
-  Role.normalizeLabel = function(roleLabel) {
+  Role.normalizeLabel = function (roleLabel) {
     // Capitalizar primera letra y quitar espacios al inicio/final
     const trimmed = roleLabel.trim();
     return trimmed.charAt(0).toUpperCase() + trimmed.slice(1).toLowerCase();
   };
 
   // Método estático para obtener roles globales
-  Role.getGlobalRoles = function() {
+  Role.getGlobalRoles = function () {
     return this.findAll({
       where: {
         is_global: true
@@ -184,12 +174,12 @@ module.exports = function (sequelize, DataTypes) {
   };
 
   // Método de instancia para verificar si un rol es global
-  Role.prototype.isGlobal = function() {
+  Role.prototype.isGlobal = function () {
     return this.is_global;
   };
 
   // Método para obtener roles por compañía
-  Role.getCompanyRoles = function(companyId) {
+  Role.getCompanyRoles = function (companyId) {
     return this.findAll({
       where: {
         company_id: companyId
@@ -198,7 +188,7 @@ module.exports = function (sequelize, DataTypes) {
   };
 
   // Relaciones
-  Role.associate = function(models) {
+  Role.associate = function (models) {
     // Relación con la compañía
     Role.belongsTo(models.companies, {
       foreignKey: 'company_id',
