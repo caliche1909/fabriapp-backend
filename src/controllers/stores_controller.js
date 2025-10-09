@@ -103,6 +103,7 @@ module.exports = {
             });
 
             if (existingStore) {
+
                 await transaction.rollback();
                 return res.status(400).json({
                     success: false,
@@ -110,6 +111,7 @@ module.exports = {
                     message: "La tienda que intenta crear YA EXISTE!",
                 });
             }
+
 
             // 🔸 PASO 7: Si llegaron datos del nuevo usuario manager, validar y crear usuario
             if (user) {
@@ -896,13 +898,17 @@ module.exports = {
 
     // 📌 Método para eliminar una tienda 
     async deleteStore(req, res) {
+        // 🔄 Usar transacción para garantizar atomicidad entre deleted_by y destroy
+        const transaction = await stores.sequelize.transaction();
 
         try {
             const { id } = req.params;
+            const user_id = req.user?.id; // Usuario que hace la eliminación
 
-            // Verificar si la tienda existe
-            const store = await stores.findByPk(id);
+            // Verificar si la tienda existe (paranoid: true excluye ya eliminadas automáticamente)
+            const store = await stores.findByPk(id, { transaction });
             if (!store) {
+                await transaction.rollback();
                 return res.status(404).json({
                     success: false,
                     status: 404,
@@ -910,15 +916,34 @@ module.exports = {
                 });
             }
 
-            // Eliminar la tienda
-            await stores.destroy({ where: { id } });
+            //verificar que la tienda no tenga visitas asociadas
+            if (store.current_visit_status === 'visited' || store.current_visit_id !== null) {
+                await transaction.rollback();
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: "La tienda no puede ser eliminada porque tiene procesos activos"
+                });
+            }
+
+            // 🗑️ Soft delete con auditoría automática via hook
+            await store.destroy({
+                userId: user_id, // Hook lo usará para deleted_by
+                transaction
+            });
+
+            // 🎯 Confirmar transacción
+            await transaction.commit();
 
             return res.status(200).json({
                 success: true,
                 status: 200,
                 message: "La tienda ha sido eliminada exitosamente."
             });
+
         } catch (error) {
+            // 🔄 Rollback en caso de error
+            await transaction.rollback();
             console.error("❌ Error al eliminar tienda:", error);
             return res.status(500).json({
                 success: false,
@@ -1074,11 +1099,11 @@ module.exports = {
 
             // 🔍 Buscar tienda con datos completos (una sola consulta optimizada)
             const store = await stores.findByPk(parseInt(store_id), {
-                include: [                 
+                include: [
                     { model: stores.sequelize.models.routes, as: 'route', attributes: ['name'] }
                 ]
             });
-            
+
             if (!store) {
                 return res.status(404).json({
                     success: false,
@@ -1154,7 +1179,7 @@ module.exports = {
                 success: true,
                 status: 200,
                 message: 'Tienda marcada como visitada exitosamente',
-                store_visit_id: visitRecord.id               
+                store_visit_id: visitRecord.id
             });
 
         } catch (error) {
@@ -1164,7 +1189,7 @@ module.exports = {
             }
 
             console.error('Error en updateStoreAsVisited:', error);
-            
+
             res.status(500).json({
                 success: false,
                 message: 'Error interno del servidor al registrar visita',
@@ -1187,7 +1212,7 @@ module.exports = {
 
             // 🔄 Actualizar todas las tiendas de la ruta a 'pending' y limpiar visit_id
             const [updatedRows] = await stores.update(
-                { 
+                {
                     current_visit_status: 'pending',
                     current_visit_id: null // 🆕 Limpiar visit_id para permitir nuevas visitas
                 },

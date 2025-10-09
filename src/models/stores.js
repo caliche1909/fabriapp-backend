@@ -125,6 +125,20 @@ module.exports = function (sequelize, DataTypes) {
         key: 'id'
       },
       comment: 'ID de la visita actual (si está visitada)'
+    },
+    deleted_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      comment: 'Fecha de eliminación lógica. NULL = activa, TIMESTAMP = eliminada'
+    },
+    deleted_by: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      references: {
+        model: 'users',
+        key: 'id'
+      },
+      comment: 'ID del usuario que eliminó la tienda (para auditoría)'
     }
   }, {
     sequelize,
@@ -135,7 +149,26 @@ module.exports = function (sequelize, DataTypes) {
     schema: 'public',
     createdAt: 'created_at',
     updatedAt: 'updated_at',
+    paranoid: true,
+    deletedAt: 'deleted_at',
     hasTrigger: true,
+    hooks: {
+      // 👇 Metodo para eliminar una tienda de forma logica sirve para auditoria
+      beforeDestroy: (instance, options) => {
+        // 🏷️ Auditoría automática: registrar quién eliminó la tienda
+        if (options && options.userId) {
+          instance.deleted_by = options.userId;
+        } else {
+          // 📝 Log para debugging si no se pasó userId
+          throw new Error('Se requiere un userId para eliminar un registro y mantener la auditoría.');
+        }
+      },
+      // 👇 Metodo para restaurar una tienda eliminada
+      beforeRestore: (instance, options) => {
+        // 🏷️ Limpiar el campo de auditoría automáticamente al restaurar
+        instance.deleted_by = null;
+      }
+    },
     indexes: [
       {
         name: "stores_pkey",
@@ -284,6 +317,26 @@ module.exports = function (sequelize, DataTypes) {
     Stores.belongsTo(models.users, {
       foreignKey: "manager_id",
       as: "manager"
+    });
+
+    // 🔗 Relación con el usuario que eliminó la tienda (auditoría)
+    Stores.belongsTo(models.users, {
+      foreignKey: 'deleted_by',
+      as: 'deleted_by_user'
+    });
+
+    // 🔗 Relación con la visita actual (campo current_visit_id)
+    Stores.belongsTo(models.store_visits, {
+      foreignKey: 'current_visit_id',
+      as: 'current_visit'
+    });
+
+    // 🔗 Relación inversa: una tienda puede tener muchas visitas históricas
+    Stores.hasMany(models.store_visits, {
+      foreignKey: 'store_id',
+      as: 'visits',
+      onDelete: 'RESTRICT', // No se puede eliminar una tienda con visitas
+      onUpdate: 'CASCADE'
     });
 
     Stores.hasMany(models.store_images, {
