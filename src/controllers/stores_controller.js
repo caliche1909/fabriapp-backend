@@ -92,24 +92,56 @@ module.exports = {
                 .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
                 .join(' ');
 
-            // 🔸 PASO 6: Validar duplicado por dirección en la misma compañía
-            // (no pueden existir dos tiendas en la misma dirección de la misma compañía)
+            // 🔸 PASO 6: Verificar si existe tienda (activa o eliminada) en la misma dirección
             const existingStore = await stores.findOne({
                 where: {
                     address: store.address,
                     company_id: company_id
                 },
+                paranoid: false, // 🔍 Incluir tiendas eliminadas
                 transaction
             });
 
-            if (existingStore) {
+            // 🔄 Variables para el flujo unificado
+            let finalStore = null;
+            let isRestoration = false;
 
-                await transaction.rollback();
-                return res.status(400).json({
-                    success: false,
-                    status: 400,
-                    message: "La tienda que intenta crear YA EXISTE!",
-                });
+            if (existingStore) {
+                if (existingStore.deleted_at) {
+                    // 🔄 CASO 1: Tienda eliminada → RESTAURAR
+                    console.log(`🔄 Restaurando tienda eliminada ID: ${existingStore.id}`);
+                    isRestoration = true;
+
+                    // Actualizar datos con la nueva información
+                    await existingStore.update({
+                        name: store.name,
+                        phone: store.phone || existingStore.phone,
+                        neighborhood: store.neighborhood,
+                        store_type_id: store.store_type_id,
+                        ubicacion: store.ubicacion || existingStore.ubicacion,
+                        opening_time: store.opening_time || existingStore.opening_time,
+                        closing_time: store.closing_time || existingStore.closing_time,
+                        city: store.city || existingStore.city,
+                        state: store.state || existingStore.state,
+                        country: store.country || existingStore.country,
+                        route_id: store.route_id || existingStore.route_id,
+                        current_visit_status: 'pending',
+                        current_visit_id: null
+                    }, { transaction });
+
+                    // Restaurar (quita deleted_at y deleted_by)
+                    await existingStore.restore({ transaction });
+                    finalStore = existingStore;
+
+                } else {
+                    // 🚫 CASO 2: Tienda activa → ERROR
+                    await transaction.rollback();
+                    return res.status(400).json({
+                        success: false,
+                        status: 400,
+                        message: "Ya existe una tienda activa en esta dirección para su compañía.",
+                    });
+                }
             }
 
 
@@ -173,16 +205,25 @@ module.exports = {
                     status: user.status || "inactive"
                 }, { transaction });
 
-                // Asignar el ID del nuevo usuario como manager de la tienda
-                store.manager_id = newUser.id;
+                // Asignar el ID del nuevo usuario como manager
+                if (isRestoration) {
+                    // Si es restauración, actualizar el manager en la tienda existente
+                    await finalStore.update({ manager_id: newUser.id }, { transaction });
+                } else {
+                    // Si es creación nueva, asignar al objeto store
+                    store.manager_id = newUser.id;
+                }
             }
 
-            // 🔸 PASO 8: Crear la tienda en la base de datos dentro de la transacción
-            const newStore = await stores.create(store, { transaction });
+            // 🔸 PASO 8: Crear tienda SOLO si no es restauración
+            if (!isRestoration) {
+                const newStore = await stores.create(store, { transaction });
+                finalStore = newStore;
+            }
 
-            // 🔸 PASO 9: Consultar la tienda recién creada con todas sus relaciones
+            // 🔸 PASO 9: Consultar la tienda final (creada o restaurada) con todas sus relaciones
             const createdStore = await stores.findOne({
-                where: { id: newStore.id },
+                where: { id: finalStore.id },
                 attributes: [
                     'id',
                     'name',
@@ -246,14 +287,17 @@ module.exports = {
             // Agregar array de imágenes vacío para satisfacer interfaz Store
             storeData.images = [];
 
-            // 🔸 PASO 11: Confirmar transacción y devolver respuesta exitosa
+            // 🔸 PASO 11: Confirmar transacción y devolver respuesta apropiada
             await transaction.commit();
 
             return res.status(201).json({
                 success: true,
                 status: 201,
-                message: "Tienda creada exitosamente",
-                store: storeData
+                message: isRestoration
+                    ? "Tienda restaurada exitosamente"
+                    : "Tienda creada exitosamente",
+                store: storeData,
+                restored: isRestoration // Información adicional para el frontend
             });
 
         } catch (error) {

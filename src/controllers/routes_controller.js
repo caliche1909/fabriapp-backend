@@ -80,9 +80,11 @@ const getSellerWithRole = async (userId, companyId) => {
 module.exports = {
     // 📌 Método para obtener todas las rutas de una compañía
     async getListRoutes(req, res) {
-        
+
         try {
             const { company_id } = req.params;
+            const { permission_type } = req.query;
+
 
             // 🔹 Validar parámetro obligatorio
             if (!company_id) {
@@ -94,11 +96,38 @@ module.exports = {
                 });
             }
 
-            // 🔹 Obtener rutas filtradas por company_id con información optimizada del vendedor
+            // 🔹 Validar permission_type
+            if (!permission_type || !['all_routes', 'assigned_routes'].includes(permission_type)) {
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: "Tipo de permiso inválido",
+                    routes: []
+                });
+            }
+
+            // 🔹 Preparar condiciones de filtro según el tipo de permiso
+            let whereConditions = {
+                company_id: company_id
+            };
+
+            // 🔹 Si el permiso es solo rutas asignadas, filtrar por usuario actual
+            if (permission_type === 'assigned_routes') {
+                const userId = req.user?.id;
+                if (!userId) {
+                    return res.status(401).json({
+                        success: false,
+                        status: 401,
+                        message: "Usuario no autenticado",
+                        routes: []
+                    });
+                }
+                whereConditions.user_id = userId;
+            }
+
+            // 🔹 Obtener rutas filtradas con información optimizada del vendedor
             const routesList = await routes.findAll({
-                where: {
-                    company_id: company_id
-                },
+                where: whereConditions,
                 attributes: ['id', 'name', 'working_days', 'user_id'],
                 include: [
                     {
@@ -135,7 +164,7 @@ module.exports = {
                 return res.status(200).json({
                     success: true,
                     status: 200,
-                    message: "No hay rutas creadas para esta compañía aún",
+                    message: permission_type === 'all_routes' ? "Su compañía aun no a creado rutas." : "No se encontraron rutas asignadas para este usuario",
                     routes: []
                 });
             }
@@ -159,7 +188,7 @@ module.exports = {
             res.status(200).json({
                 success: true,
                 status: 200,
-                message: "Rutas obtenidas exitosamente",
+                message: permission_type === 'all_routes' ? "Se han cargado todas las rutas de la compañía." : "Se han cargado las rutas asignadas a este usuario.",
                 routes: formattedRoutes
             });
 

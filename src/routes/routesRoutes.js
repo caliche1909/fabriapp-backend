@@ -1,6 +1,6 @@
 const express = require('express');
 const { routesController } = require('../controllers');
-const { verifyToken, checkPermission } = require('../middlewares/jwt.middleware');
+const { verifyToken, checkPermission, checkAnyPermission } = require('../middlewares/jwt.middleware');
 const {
     createListRoutesByCompanyLimiter,
     createCreateRouteLimiter,
@@ -20,16 +20,17 @@ const deleteRouteLimiter = createDeleteRouteLimiter();
 
 /*
     PERMISOS REGISTRADOS EN LA BASE DE DATOS PARA ESTAS RUTAS
-    1. view-routes-by-company -> Permite ver las rutas por compañía
+    1. view-routes-by-company -> Permite ver todas las rutas por compañía
     2. create-route-by-company -> Permite crear una ruta de una compañia
     3. update-route-by-company -> Permite actualizar una ruta de una compañia
     4. delete-route-by-company -> Permite eliminar una ruta de una compañia
+    5. view-assigned-routes -> Permite ver las rutas asignadas al usuario
 */
 
 router.get('/list/:company_id',
     verifyToken,
     listRoutesByCompanyLimiter, // 🔒 40 consultas/15min (se guarda en Redux)
-    checkPermission('view_routes_by_company'), // permiso en la base de datos para ver las rutas por compañía
+    checkAnyPermission(['view_routes_by_company', 'view_assigned_routes']), // permiso en la base de datos para ver las rutas por compañía
     routesController.getListRoutes
 );
 
