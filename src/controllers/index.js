@@ -15,6 +15,8 @@ const rolesController = require('./roles_controller');
 const authController = require('./auth_controller');
 const geocodingController = require('./geocoding_controller');
 const no_saleCategories = require('./no_sale_categories_controller');
+const payment_methodsController = require('./payment_methods_controller');
+const salesController = require('./sales_controller');
 
 module.exports = {
     userController,
@@ -33,5 +35,7 @@ module.exports = {
     rolesController,
     authController,
     geocodingController,
-    no_saleCategories
+    no_saleCategories,
+    payment_methodsController,
+    salesController
 };

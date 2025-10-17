@@ -47,6 +47,22 @@ module.exports = function (sequelize, DataTypes) {
       ),
       allowNull: true
     },
+    deleted_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'deleted_at',
+      comment: 'Fecha de eliminación lógica. NULL = activa, TIMESTAMP = eliminada'
+    },
+    deleted_by: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      references: {
+        model: 'users',
+        key: 'id'
+      },
+      field: 'deleted_by',
+      comment: 'ID del usuario que eliminó la ruta (para auditoría)'
+    },
   }, {
     sequelize,
     tableName: 'routes',
@@ -56,6 +72,26 @@ module.exports = function (sequelize, DataTypes) {
     schema: 'public',
     createdAt: 'created_at',
     updatedAt: 'updated_at',
+    paranoid: true,
+    deletedAt: 'deleted_at',
+    hasTrigger: true,
+    hooks: {
+      // 👇 Método para eliminar una ruta de forma lógica (auditoría)
+      beforeDestroy: (instance, options) => {
+        // 🏷️ Auditoría automática: registrar quién eliminó la ruta
+        if (options && options.userId) {
+          instance.deleted_by = options.userId;
+        } else {
+          // 📝 Log para debugging si no se pasó userId
+          throw new Error('Se requiere un userId para eliminar un registro y mantener la auditoría.');
+        }
+      },
+      // 👇 Método para restaurar una ruta eliminada
+      beforeRestore: (instance, options) => {
+        // 🏷️ Limpiar el campo de auditoría automáticamente al restaurar
+        instance.deleted_by = null;
+      }
+    },
     indexes: [
       {
         name: "routes_pkey",
@@ -88,6 +124,16 @@ module.exports = function (sequelize, DataTypes) {
         fields: [
           { name: "name" }
         ]
+      },
+      {
+        name: "idx_routes_active_only",
+        fields: [
+          { name: "company_id" },
+          { name: "id" }
+        ],
+        where: {
+          deleted_at: null
+        }
       }
     ]
   });
@@ -114,6 +160,12 @@ module.exports = function (sequelize, DataTypes) {
       as: 'no_sale_reports',
       onDelete: 'SET NULL', // Si se elimina la ruta, el campo se pone NULL
       onUpdate: 'CASCADE'
+    });
+
+    // � Relación con el usuario que eliminó la ruta (auditoría)
+    Routes.belongsTo(models.users, {
+      foreignKey: 'deleted_by',
+      as: 'deleted_by_user'
     });
   };
 

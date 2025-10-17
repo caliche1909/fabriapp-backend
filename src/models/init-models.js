@@ -23,6 +23,7 @@ var _no_sale_categories = require("./no_sale_categories"); // 📌 Nuevo modelo 
 var _no_sale_reasons = require("./no_sale_reasons"); // 📌 Nuevo modelo agregado
 var _store_no_sale_reports = require("./store_no_sale_reports"); // 📌 Nuevo modelo agregado
 var _store_visits = require("./store_visits");
+var _user_companies = require("./user_companies");
 var _user_current_position = require("./user_current_position");
 var _users = require("./users");
 var _work_areas = require("./work_areas");
@@ -52,6 +53,7 @@ function initModels(sequelize) {
   var no_sale_reasons = _no_sale_reasons(sequelize, DataTypes); // 📌 Nuevo modelo agregado
   var store_no_sale_reports = _store_no_sale_reports(sequelize, DataTypes); // 📌 Nuevo modelo agregado
   var store_visits = _store_visits(sequelize, DataTypes);
+  var user_companies = _user_companies(sequelize, DataTypes);
   var user_current_position = _user_current_position(sequelize, DataTypes);
   var users = _users(sequelize, DataTypes);
   var work_areas = _work_areas(sequelize, DataTypes);
@@ -70,6 +72,13 @@ function initModels(sequelize) {
 
   sales.belongsTo(payment_methods, { as: "payment_method", foreignKey: "payment_method_id" });
   payment_methods.hasMany(sales, { as: "sales", foreignKey: "payment_method_id" });
+
+  // ✅ Relaciones para payment_methods
+  payment_methods.belongsTo(companies, { as: "company", foreignKey: "company_id", onDelete: "CASCADE" });
+  companies.hasMany(payment_methods, { as: "payment_methods", foreignKey: "company_id", onDelete: "CASCADE" });
+
+  payment_methods.belongsTo(users, { as: "deleted_by_user", foreignKey: "deleted_by", onDelete: "SET NULL" });
+  users.hasMany(payment_methods, { as: "deleted_payment_methods", foreignKey: "deleted_by", onDelete: "SET NULL" });
 
   recipes.belongsTo(products, { as: "product", foreignKey: "product_id" });
   products.hasMany(recipes, { as: "recipes", foreignKey: "product_id" });
@@ -162,6 +171,20 @@ function initModels(sequelize) {
   store_no_sale_reports.belongsTo(store_visits, { as: "visit", foreignKey: "visit_id" });
   store_visits.hasOne(store_no_sale_reports, { as: "no_sale_report", foreignKey: "visit_id" });
 
+  // ✅ Relaciones para user_companies
+  user_companies.belongsTo(users, { as: "user", foreignKey: "user_id", onDelete: "CASCADE" });
+  users.hasMany(user_companies, { as: "company_assignments", foreignKey: "user_id", onDelete: "CASCADE" });
+
+  user_companies.belongsTo(companies, { as: "company", foreignKey: "company_id", onDelete: "CASCADE" });
+  companies.hasMany(user_companies, { as: "user_assignments", foreignKey: "company_id", onDelete: "CASCADE" });
+
+  user_companies.belongsTo(roles, { as: "role", foreignKey: "role_id" });
+  roles.hasMany(user_companies, { as: "user_assignments", foreignKey: "role_id" });
+
+  // ✅ Relaciones muchos a muchos a través de user_companies
+  users.belongsToMany(companies, { through: user_companies, foreignKey: "user_id", otherKey: "company_id", as: "assigned_companies" });
+  companies.belongsToMany(users, { through: user_companies, foreignKey: "company_id", otherKey: "user_id", as: "assigned_users" });
+
   // ✅ Relaciones para store_visits
   store_visits.belongsTo(users, { as: "user", foreignKey: "user_id" });
   users.hasMany(store_visits, { as: "store_visits", foreignKey: "user_id" });
@@ -197,6 +220,7 @@ function initModels(sequelize) {
     no_sale_reasons,
     store_no_sale_reports,
     store_visits,
+    user_companies,
     user_current_position,
     users,
     work_areas,

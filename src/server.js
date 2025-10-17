@@ -22,6 +22,8 @@ const modulesRoutes = require('./routes/modulesRoutes');
 const geocodingRoutes = require('./routes/geocodingRoutes');
 const storeNoSaleReportsRoutes = require('./routes/store_no_sale_reports_routes');
 const noSaleCategoriesRoutes = require('./routes/no_sale_categories_routes');
+const paymetMethodsRoutes = require('./routes/paymetMethodsRoutes');
+const salesRoutes = require('./routes/sales_routes');
 const http = require('http');
 const initSockets = require('./sockets');
 
@@ -119,6 +121,9 @@ app.use('/api/modules', modulesRoutes);
 app.use('/api/geocoding', geocodingRoutes);
 app.use('/api/store_no_sale_reports', storeNoSaleReportsRoutes);
 app.use('/api/no_sale_categories', noSaleCategoriesRoutes);
+app.use('/api/payment_methods', paymetMethodsRoutes);
+app.use('/api/sales', salesRoutes);
+
 
 // Puerto del servidor
 const PORT = process.env.PORT || 3000;

@@ -112,10 +112,11 @@ module.exports = function (sequelize, DataTypes) {
       defaultValue: 'pending',
       validate: {
         isIn: {
-          args: [['pending', 'visited']],
-          msg: "El estado de visita debe ser 'pending' o 'visited'"
+          args: [['pending', 'visited', 'completed']],
+          msg: "El estado de visita debe ser 'pending', 'visited' o 'completed'"
         }
-      }
+      },
+      comment: 'Estado de la visita actual: pending (pendiente), visited (visitada), completed (completada con venta)'
     },
     current_visit_id: {
       type: DataTypes.INTEGER,
@@ -227,6 +228,19 @@ module.exports = function (sequelize, DataTypes) {
         fields: [
           { name: "company_id" },
           { name: "address" }
+        ]
+      },
+      {
+        name: "idx_stores_route_visit_status",
+        fields: [
+          { name: "route_id" },
+          { name: "current_visit_status" }
+        ]
+      },
+      {
+        name: "idx_stores_visit_status",
+        fields: [
+          { name: "current_visit_status" }
         ]
       }
     ]

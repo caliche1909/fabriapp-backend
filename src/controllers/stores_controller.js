@@ -1114,7 +1114,7 @@ module.exports = {
             const user_id = req.user.id;
 
             // 🔍 VALIDACIONES (optimizadas y concisas)
-            if (!store_id || !distance) {
+            if (!store_id || distance === undefined || distance === null) {
                 return res.status(400).json({
                     success: false,
                     status: 400,

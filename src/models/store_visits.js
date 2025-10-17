@@ -164,6 +164,37 @@ module.exports = function (sequelize, DataTypes) {
           { name: "store_id" },
           { name: "date" }
         ]
+      },
+      // 🆕 Índices adicionales que están en la tabla real
+      {
+        name: "idx_store_visits_analysis",
+        fields: [
+          { name: "store_id" },
+          { name: "date" },
+          { name: "sale_amount" }
+        ],
+        where: {
+          store_id: {
+            [Sequelize.Op.ne]: null
+          }
+        }
+      },
+      {
+        name: "idx_store_visits_sale_amount",
+        fields: [
+          { name: "sale_amount" }
+        ],
+        where: {
+          sale_amount: {
+            [Sequelize.Op.gt]: 0
+          }
+        }
+      },
+      {
+        name: "idx_store_visits_store_name",
+        fields: [
+          { name: "store_name" }
+        ]
       }
     ]
   });

@@ -346,6 +346,14 @@ module.exports = function (sequelize, DataTypes) {
             onDelete: 'RESTRICT', // No se puede eliminar una compañía con reportes
             onUpdate: 'CASCADE'
         });
+
+        // 💳 Relación con PaymentMethods - Una compañía puede tener muchos métodos de pago personalizados
+        Company.hasMany(models.payment_methods, {
+            foreignKey: 'company_id',
+            as: 'payment_methods',
+            onDelete: 'CASCADE', // Si se elimina la compañía, se eliminan sus métodos personalizados
+            onUpdate: 'NO ACTION'
+        });
     };
 
     return Company;

@@ -309,6 +309,14 @@ module.exports = function (sequelize, DataTypes) {
       onDelete: 'RESTRICT', // No se puede eliminar un usuario con reportes
       onUpdate: 'CASCADE'
     });
+
+    // 💳 Relación con PaymentMethods para auditoría de eliminación
+    Users.hasMany(models.payment_methods, {
+      foreignKey: 'deleted_by',
+      as: 'deleted_payment_methods',
+      onDelete: 'SET NULL', // Si se elimina el usuario, se pone NULL en deleted_by
+      onUpdate: 'NO ACTION'
+    });
   };
 
   return Users;

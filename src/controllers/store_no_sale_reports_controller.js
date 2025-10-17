@@ -1,10 +1,14 @@
-const { store_no_sale_reports, no_sale_categories, no_sale_reasons, stores, users, routes, companies, store_visits } = require('../models');
+const { store_no_sale_reports, no_sale_categories, no_sale_reasons, stores, users, routes, companies, store_visits, sales } = require('../models');
 const { ValidationError, ForeignKeyConstraintError } = require('sequelize');
+
 
 const StoreNoSaleReportsController = {
 
     // 📌 MÉTODO PARA CREAR UN REPORTE DE NO-VENTA
     async createNoSaleReport(req, res) {
+        // 🔄 Iniciar transacción para garantizar consistencia
+        const transaction = await store_no_sale_reports.sequelize.transaction();
+
         try {
             const {
                 visit_id,
@@ -23,6 +27,7 @@ const StoreNoSaleReportsController = {
 
             // Validar campos requeridos
             if (!store_id || !user_id || !company_id || !category_id || !reason_id || !comments) {
+                await transaction.rollback();
                 return res.status(400).json({
                     success: false,
                     status: 400,
@@ -31,8 +36,9 @@ const StoreNoSaleReportsController = {
             }
 
             // Verificar que la tienda exista
-            const store = await stores.findByPk(store_id);
+            const store = await stores.findByPk(store_id, { transaction });
             if (!store) {
+                await transaction.rollback();
                 return res.status(404).json({
                     success: false,
                     status: 404,
@@ -42,6 +48,7 @@ const StoreNoSaleReportsController = {
 
             // verificar que la tienda este visitada antes de generer el reporte
             if (visit_id !== store.current_visit_id || store.current_visit_status === 'pending') {
+                await transaction.rollback();
                 return res.status(400).json({
                     success: false,
                     status: 400,
@@ -52,10 +59,12 @@ const StoreNoSaleReportsController = {
             // Verificar que no exista un reporte para la misma visita (si se proporciona visit_id)
             if (visit_id) {
                 const existingReport = await store_no_sale_reports.findOne({
-                    where: { visit_id }
+                    where: { visit_id },
+                    transaction
                 });
 
                 if (existingReport) {
+                    await transaction.rollback();
                     return res.status(409).json({
                         success: false,
                         status: 409,
@@ -64,10 +73,27 @@ const StoreNoSaleReportsController = {
                 }
             }
 
+            //verifiacar que no exista una venta para la misma visita (si se proporciona visit_id)
+            if (visit_id) {
+                const existingSale = await sales.findOne({
+                    where: { visit_id },
+                    transaction
+                });
+
+                if (existingSale) {
+                    await transaction.rollback();
+                    return res.status(409).json({
+                        success: false,
+                        status: 409,
+                        message: 'Ya se registró una venta para esta visita.'
+                    });
+                }
+            }
 
 
-            // Crear el reporte usando el método del modelo que incluye validaciones
-            await store_no_sale_reports.createReport({
+
+            // Crear el reporte usando transacción para consistencia
+            await store_no_sale_reports.create({
                 visit_id: visit_id || null,
                 store_id,
                 user_id,
@@ -78,15 +104,29 @@ const StoreNoSaleReportsController = {
                 comments: comments.trim(),
                 client_name: client_name ? client_name.trim() : null,
                 client_phone: client_phone ? client_phone.trim() : null
-            });
+            }, { transaction });
+
+            // 🏪 Marcar la tienda como 'completed' después de crear el reporte de no-venta
+            await stores.update(
+                { current_visit_status: 'completed' },
+                {
+                    where: { id: store_id },
+                    transaction
+                }
+            );
+
+            // ✅ Confirmar la transacción
+            await transaction.commit();
 
             res.status(201).json({
                 success: true,
                 status: 201,
-                message: 'El reporte de NO VENTA se ha creado exitosamente'
+                message: 'El reporte de NO VENTA se ha creado exitosamente y la tienda ha sido marcada como completada'
             });
 
         } catch (error) {
+            // 🔄 Revertir la transacción en caso de error
+            await transaction.rollback();
             console.error('Error al crear reporte de no-venta:', error);
 
             if (error instanceof ValidationError) {
