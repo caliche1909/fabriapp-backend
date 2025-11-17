@@ -1149,38 +1149,48 @@ module.exports = {
 
             // Obtener usuarios con geolocalización activa
             const usersList = await user_companies.findAll({
-                where: {
-                    company_id: company_id,
-                    status: 'active' // Solo usuarios activos en la empresa
-                },
+                where: { company_id, status: 'active' },
                 include: [
                     {
                         model: users,
                         as: 'user',
-                        where: {
-                            require_geolocation: true, // Solo usuarios que requieren geolocalización
-                            status: 'active' // Solo usuarios activos
-                        },
-                        attributes: [
-                            "id",
-                            "first_name",
-                            "last_name",
-                            "image_url"
+                        where: { require_geolocation: true, status: 'active' },
+                        attributes: ["id", "first_name", "last_name", "image_url"],
+                        include: [
+                            {
+                                model: user_current_position,
+                                as: 'current_position',
+                                attributes: ['position', 'accuracy', 'updated_at', 'is_active'],
+                                required: false  // LEFT JOIN (permite users sin ubicación)
+                            }
                         ]
                     }
                 ]
             });
 
-            // Formatear respuesta específica para el mapa
+            // ⭐ MEJORADO: Formatear con ubicación real validando is_active
             const formattedUsers = usersList.map(userCompany => {
                 const user = userCompany.user;
+                const position = user.current_position;
+
+                // Extraer coordenadas solo si la posición existe, está activa y tiene datos
+                let location = null;
+                if (position && position.position && position.is_active) {
+                    const coords = position.getCoordinates();
+                    if (coords) {
+                        location = {
+                            lat: coords.latitude,
+                            lng: coords.longitude
+                        };
+                    }
+                }
 
                 return {
                     id: user.id,
                     name: `${user.first_name.split(' ')[0]} ${user.last_name.split(' ')[0]}`,
                     imageUrl: user.image_url,
-                    location: null, // Se actualizará via WebSocket
-                    lastLocationUpdate: null // Se actualizará via WebSocket
+                    location: location, // ✅ Ubicación real o null
+                    lastLocationUpdate: position?.updated_at || null // ✅ Timestamp real o null
                 };
             });
 
