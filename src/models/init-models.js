@@ -10,6 +10,7 @@ var _recipe_items = require("./recipe_items");
 var _recipes = require("./recipes");
 var _roles = require("./roles");
 var _routes = require("./routes");
+var _route_types = require("./route_types");
 var _sale_items = require("./sale_items");
 var _sales = require("./sales");
 var _store_images = require("./store_images");
@@ -40,6 +41,7 @@ function initModels(sequelize) {
   var recipes = _recipes(sequelize, DataTypes);
   var roles = _roles(sequelize, DataTypes);
   var routes = _routes(sequelize, DataTypes);
+  var route_types = _route_types(sequelize, DataTypes);
   var sale_items = _sale_items(sequelize, DataTypes);
   var sales = _sales(sequelize, DataTypes);
   var store_images = _store_images(sequelize, DataTypes);
@@ -91,6 +93,26 @@ function initModels(sequelize) {
 
   users.belongsTo(roles, { as: "role", foreignKey: "role_id" });
   roles.hasMany(users, { as: "users", foreignKey: "role_id" });
+
+  // ✅ Relaciones para route_types
+  route_types.belongsTo(companies, { as: "company", foreignKey: "company_id" });
+  companies.hasMany(route_types, { as: "route_types", foreignKey: "company_id" });
+
+  route_types.belongsTo(users, { as: "deleted_by_user", foreignKey: "deleted_by" });
+  users.hasMany(route_types, { as: "deleted_route_types", foreignKey: "deleted_by" });
+
+  // ✅ Relaciones para routes
+  routes.belongsTo(route_types, { as: "route_type", foreignKey: "route_type_id" });
+  route_types.hasMany(routes, { as: "routes", foreignKey: "route_type_id" });
+
+  routes.belongsTo(companies, { as: "company", foreignKey: "company_id" });
+  companies.hasMany(routes, { as: "routes", foreignKey: "company_id" });
+
+  routes.belongsTo(users, { as: "seller", foreignKey: "user_id" });
+  users.hasMany(routes, { as: "assigned_routes", foreignKey: "user_id" });
+
+  routes.belongsTo(users, { as: "deleted_by_user", foreignKey: "deleted_by" });
+  users.hasMany(routes, { as: "deleted_routes", foreignKey: "deleted_by" });
 
   stores.belongsTo(routes, { as: "route", foreignKey: "route_id" });
   routes.hasMany(stores, { as: "stores", foreignKey: "route_id" });
@@ -207,6 +229,7 @@ function initModels(sequelize) {
     recipes,
     roles,
     routes,
+    route_types,
     sale_items,
     sales,
     store_images,

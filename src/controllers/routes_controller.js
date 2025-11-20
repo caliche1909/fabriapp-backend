@@ -1,4 +1,4 @@
-const { routes, users, user_companies, roles, stores } = require('../models');
+const { routes, users, user_companies, roles, stores, route_types } = require('../models');
 
 // 🎯 Función helper para formatear datos del vendedor de forma consistente
 const formatSellerData = (seller, assignment) => {
@@ -130,7 +130,7 @@ module.exports = {
             // 🔹 Obtener rutas filtradas con información optimizada del vendedor
             const routesList = await routes.findAll({
                 where: whereConditions,
-                attributes: ['id', 'name', 'working_days', 'user_id'],
+                attributes: ['id', 'name', 'working_days', 'user_id', 'route_type_id'],
                 include: [
                     {
                         model: users,
@@ -155,6 +155,12 @@ module.exports = {
                                 required: false
                             }
                         ],
+                        required: false
+                    },
+                    {
+                        model: route_types,
+                        as: 'route_type',
+                        attributes: ['id', 'name', 'description', 'color', 'display_order', 'is_active', 'is_global'],
                         required: false
                     }
                 ],
@@ -181,7 +187,17 @@ module.exports = {
                     id: route.id,
                     name: route.name,
                     seller: route.seller ? formatSellerData(route.seller, assignment) : null,
-                    working_days: route.working_days || []
+                    working_days: route.working_days || [],
+                    route_type_id: route.route_type_id || null,
+                    route_type: route.route_type ? {
+                        id: route.route_type.id,
+                        name: route.route_type.name,
+                        description: route.route_type.description,
+                        color: route.route_type.color,
+                        display_order: route.route_type.display_order,
+                        is_active: route.route_type.is_active,
+                        is_global: route.route_type.is_global
+                    } : null
                     // ✅ NO incluimos stores según tu especificación
                 };
             });
@@ -282,7 +298,7 @@ module.exports = {
 
         try {
             const { company_id } = req.params;
-            const { name, user_id, working_days } = req.body;
+            const { name, user_id, working_days, route_type_id } = req.body;
 
 
 
@@ -331,9 +347,19 @@ module.exports = {
                 // Solo asignar el nuevo user_id si viene en los datos, sino dejarlo en null
                 existingRoute.user_id = user_id || null;
                 existingRoute.working_days = working_days || [];
+                existingRoute.route_type_id = route_type_id || null;
 
                 // Usar el hook beforeRestore para limpiar campos de auditoría
                 await existingRoute.restore();
+
+                // 🔹 Recargar la ruta con el route_type incluido
+                await existingRoute.reload({
+                    include: [{
+                        model: route_types,
+                        as: 'route_type',
+                        attributes: ['id', 'name', 'description', 'color', 'display_order', 'is_active', 'is_global']
+                    }]
+                });
 
                 // 🔹 Obtener los datos del vendedor solo si se asignó uno nuevo
                 const sellerData = existingRoute.user_id ? await getSellerWithRole(existingRoute.user_id, company_id) : null;
@@ -344,6 +370,16 @@ module.exports = {
                     name: existingRoute.name,
                     seller: sellerData,
                     working_days: existingRoute.working_days || [],
+                    route_type_id: existingRoute.route_type_id || null,
+                    route_type: existingRoute.route_type ? {
+                        id: existingRoute.route_type.id,
+                        name: existingRoute.route_type.name,
+                        description: existingRoute.route_type.description,
+                        color: existingRoute.route_type.color,
+                        display_order: existingRoute.route_type.display_order,
+                        is_active: existingRoute.route_type.is_active,
+                        is_global: existingRoute.route_type.is_global
+                    } : null,
                     stores: []
                 };
 
@@ -361,7 +397,17 @@ module.exports = {
                 name: normalizedName,
                 company_id,
                 user_id: user_id || null,
-                working_days: working_days || []
+                working_days: working_days || [],
+                route_type_id: route_type_id || null
+            });
+
+            // 🔹 Recargar la ruta con el route_type incluido
+            await newRoute.reload({
+                include: [{
+                    model: route_types,
+                    as: 'route_type',
+                    attributes: ['id', 'name', 'description', 'color', 'display_order', 'is_active', 'is_global']
+                }]
             });
 
             // 🔹 Obtener los datos del vendedor si existe
@@ -373,6 +419,16 @@ module.exports = {
                 name: newRoute.name,
                 seller: sellerData,
                 working_days: newRoute.working_days || [],
+                route_type_id: newRoute.route_type_id || null,
+                route_type: newRoute.route_type ? {
+                    id: newRoute.route_type.id,
+                    name: newRoute.route_type.name,
+                    description: newRoute.route_type.description,
+                    color: newRoute.route_type.color,
+                    display_order: newRoute.route_type.display_order,
+                    is_active: newRoute.route_type.is_active,
+                    is_global: newRoute.route_type.is_global
+                } : null,
                 stores: []
             };
 
@@ -398,7 +454,7 @@ module.exports = {
 
         try {
             const { id } = req.params;
-            const { name, user_id, working_days } = req.body;
+            const { name, user_id, working_days, route_type_id } = req.body;
 
             if (!name) {
                 return res.status(400).json({
@@ -426,8 +482,18 @@ module.exports = {
             route.name = normalizedName || route.name;
             route.user_id = user_id !== undefined ? user_id : route.user_id;
             route.working_days = working_days || route.working_days;
+            route.route_type_id = route_type_id !== undefined ? route_type_id : route.route_type_id;
 
             await route.save();
+
+            // 🔹 Recargar la ruta con el route_type incluido
+            await route.reload({
+                include: [{
+                    model: route_types,
+                    as: 'route_type',
+                    attributes: ['id', 'name', 'description', 'color', 'display_order', 'is_active', 'is_global']
+                }]
+            });
 
             // 🔹 Obtener los datos del vendedor actualizados si existe
             const sellerData = await getSellerWithRole(route.user_id, route.company_id);
@@ -437,7 +503,17 @@ module.exports = {
                 id: route.id,
                 name: route.name,
                 seller: sellerData,
-                working_days: route.working_days || []
+                working_days: route.working_days || [],
+                route_type_id: route.route_type_id || null,
+                route_type: route.route_type ? {
+                    id: route.route_type.id,
+                    name: route.route_type.name,
+                    description: route.route_type.description,
+                    color: route.route_type.color,
+                    display_order: route.route_type.display_order,
+                    is_active: route.route_type.is_active,
+                    is_global: route.route_type.is_global
+                } : null
                 // ✅ NO incluimos stores
             };
 

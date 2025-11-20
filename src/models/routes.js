@@ -41,6 +41,15 @@ module.exports = function (sequelize, DataTypes) {
         key: 'id'
       }
     },
+    route_type_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: 'route_types',
+        key: 'id'
+      },
+      comment: 'Tipo de ruta (FK a route_types) - preventa, entrega, postventa, etc.'
+    },
     working_days: {
       type: DataTypes.ARRAY(
         DataTypes.ENUM('domingo', 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado')
@@ -134,6 +143,15 @@ module.exports = function (sequelize, DataTypes) {
         where: {
           deleted_at: null
         }
+      },
+      {
+        name: "idx_routes_route_type",
+        fields: [
+          { name: "route_type_id" }
+        ],
+        where: {
+          deleted_at: null
+        }
       }
     ]
   });
@@ -149,6 +167,12 @@ module.exports = function (sequelize, DataTypes) {
       as: 'seller'
     });
 
+    // 🔗 Relación con route_types - Una ruta pertenece a un tipo de ruta
+    Routes.belongsTo(models.route_types, {
+      foreignKey: 'route_type_id',
+      as: 'route_type'
+    });
+
     Routes.hasMany(models.stores, {
       foreignKey: "route_id",
       as: "stores"
@@ -162,7 +186,13 @@ module.exports = function (sequelize, DataTypes) {
       onUpdate: 'CASCADE'
     });
 
-    // � Relación con el usuario que eliminó la ruta (auditoría)
+    // 🔗 Relación con store_visits - Una ruta puede tener muchas visitas
+    Routes.hasMany(models.store_visits, {
+      foreignKey: 'route_id',
+      as: 'visits'
+    });
+
+    // 🔗 Relación con el usuario que eliminó la ruta (auditoría)
     Routes.belongsTo(models.users, {
       foreignKey: 'deleted_by',
       as: 'deleted_by_user'
