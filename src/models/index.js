@@ -26,7 +26,7 @@ if (!env) {
 
 console.log(`🌍 Entorno detectado: ${env}`);
 
-const config = require(__dirname + '/../config/config.json')[env];
+const config = require(__dirname + '/../config/config.js')[env];
 const db = {};
 
 let sequelize;

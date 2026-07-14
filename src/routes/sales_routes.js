@@ -1,5 +1,5 @@
 const express = require('express');
-const { salesController } = require('../controllers');
+const { salesController, salesReportsController } = require('../controllers');
 const { verifyToken, checkPermission, checkAnyPermission } = require('../middlewares/jwt.middleware');
 
 // 🛡️ IMPORTAR RATE LIMITING
@@ -40,6 +40,92 @@ router.post('/createSale',
     createSaleLimiter,
     checkPermission('create_new_sale_in_route'), // permiso en la base de datos para crear ventas
     salesController.createSale
+);
+
+
+
+// 📊 RUTAS DE REPORTES Y ANALÍTICA (solo lectura)
+// Todas filtran por la compañía del usuario autenticado. Los owners tienen
+// acceso total; los colaboradores requieren el permiso indicado.
+
+const reportsLimiter = createQueryLimiter();
+
+/**
+ * @route   GET /api/sales/reports/summary
+ * @desc    KPIs generales + top vendedores/tiendas (Dashboard)
+ * @query   from?=YYYY-MM-DD, to?=YYYY-MM-DD
+ * @access  Privado — permiso 'view_reports'
+ */
+router.get('/reports/summary',
+    verifyToken,
+    reportsLimiter,
+    checkPermission('view_reports'),
+    salesReportsController.getSummary
+);
+
+/**
+ * @route   GET /api/sales/reports/analytics
+ * @desc    Serie temporal + desglose por vendedor, tienda y método de pago
+ * @query   from?, to?, granularity?=day|month|year
+ * @access  Privado — permiso 'view_reports'
+ */
+router.get('/reports/analytics',
+    verifyToken,
+    reportsLimiter,
+    checkPermission('view_reports'),
+    salesReportsController.getAnalytics
+);
+
+/**
+ * @route   GET /api/sales/reports/no-sale
+ * @desc    Reportes de no-venta agregados por categoría y razón
+ * @query   from?, to?
+ * @access  Privado — permiso 'view_reports'
+ */
+router.get('/reports/no-sale',
+    verifyToken,
+    reportsLimiter,
+    checkPermission('view_reports'),
+    salesReportsController.getNoSaleReport
+);
+
+/**
+ * @route   GET /api/sales/reports/sellers
+ * @desc    Lista de vendedores (miembros activos) para los selectores
+ * @access  Privado — permiso 'view_reports'
+ */
+router.get('/reports/sellers',
+    verifyToken,
+    reportsLimiter,
+    checkPermission('view_reports'),
+    salesReportsController.getSellers
+);
+
+/**
+ * @route   GET /api/sales/reports/cuadre
+ * @desc    Cuadre de ventas: visitas del período (con/sin venta), resumen por
+ *          vendedor y montos a cobrar por método de pago. Por defecto HOY.
+ * @query   from?, to?, user_id?
+ * @access  Privado — permiso 'view_reports'
+ */
+router.get('/reports/cuadre',
+    verifyToken,
+    reportsLimiter,
+    checkPermission('view_reports'),
+    salesReportsController.getCuadre
+);
+
+/**
+ * @route   GET /api/sales/list
+ * @desc    Historial de ventas paginado con filtros
+ * @query   from?, to?, store_id?, user_id?, payment_method_id?, page?, limit?
+ * @access  Privado — permiso 'view_sales_history'
+ */
+router.get('/list',
+    verifyToken,
+    reportsLimiter,
+    checkPermission('view_sales_history'),
+    salesReportsController.getSalesList
 );
 
 

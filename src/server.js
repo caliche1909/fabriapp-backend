@@ -36,9 +36,14 @@ const corsOptions = {
         // Permitir peticiones sin origin (aplicaciones móviles, Postman, etc.)
         if (!origin) return callback(null, true);
 
+        // Orígenes de desarrollo: el client arranca por defecto en 5174, pero
+        // si está ocupado hace fallback a 5175, 5176, ... (hasta 5183). Se
+        // permiten desde el 5173 para cubrir también arranques manuales en ese
+        // puerto y que CORS no bloquee al client en ningún puerto alternativo.
+        const devOrigins = Array.from({ length: 12 }, (_, i) => `http://localhost:${5173 + i}`);
+
         const allowedOrigins = [
-            'http://localhost:5173',
-            'http://localhost:5174',
+            ...devOrigins,                      // localhost:5173 .. 5182 (dev + fallback)
             'https://www.fabriapp.com',        // Producción principal
             'https://fabriapp.com',            // Producción sin www
             process.env.FRONTEND_URL,          // URL desde variable de entorno
@@ -127,14 +132,46 @@ app.use('/api/payment_methods', paymetMethodsRoutes);
 app.use('/api/sales', salesRoutes);
 
 
-// Puerto del servidor
-const PORT = process.env.PORT || 3000;
+// Puerto del servidor: intenta el puerto por defecto y, si está ocupado
+// (EADDRINUSE), prueba los siguientes de forma consecutiva hasta encontrar
+// uno libre. La búsqueda está acotada por MAX_PORT_ATTEMPTS para no quedarse
+// buscando indefinidamente.
+const DEFAULT_PORT = parseInt(process.env.PORT, 10) || 3000;
+const MAX_PORT_ATTEMPTS = 10; // límite de búsqueda: DEFAULT_PORT .. DEFAULT_PORT+9
+
 const httpServer = http.createServer(app);
 
 // Inicializar Socket.IO
 initSockets(httpServer);
 
-httpServer.listen(PORT, () => {
-    console.log(`API y WebSocket corriendo en http://localhost:${PORT}`);
+let currentPort = DEFAULT_PORT;
+let portAttempts = 0;
+
+httpServer.on('listening', () => {
+    // Sincroniza process.env.PORT con el puerto realmente usado para que las
+    // rutas que lo reportan (`/`, `/health`) muestren el valor correcto.
+    process.env.PORT = String(currentPort);
+    if (currentPort !== DEFAULT_PORT) {
+        console.warn(`⚠️  El puerto ${DEFAULT_PORT} estaba ocupado. Se arrancó en el puerto ${currentPort}.`);
+    }
+    console.log(`✅ API y WebSocket corriendo en http://localhost:${currentPort}`);
 });
+
+httpServer.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+        portAttempts++;
+        if (portAttempts >= MAX_PORT_ATTEMPTS) {
+            console.error(`❌ No se encontró un puerto libre entre ${DEFAULT_PORT} y ${DEFAULT_PORT + MAX_PORT_ATTEMPTS - 1}. Abortando.`);
+            process.exit(1);
+        }
+        console.warn(`🚫 Puerto ${currentPort} en uso. Probando el ${currentPort + 1}...`);
+        currentPort++;
+        setTimeout(() => httpServer.listen(currentPort), 100);
+    } else {
+        // Cualquier otro error de arranque es real: propágalo.
+        throw err;
+    }
+});
+
+httpServer.listen(currentPort);
 

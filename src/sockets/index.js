@@ -10,8 +10,13 @@ module.exports = (httpServer) => {
                 // Permitir peticiones sin origin (aplicaciones móviles, etc.)
                 if (!origin) return callback(null, true);
                 
+                // Orígenes de desarrollo: el client arranca por defecto en 5174,
+                // pero puede hacer fallback a 5175, 5176, ... Se permiten desde el
+                // 5173 para no bloquear el WebSocket en ningún puerto alternativo.
+                const devOrigins = Array.from({ length: 12 }, (_, i) => `http://localhost:${5173 + i}`);
+
                 const allowedOrigins = [
-                    'http://localhost:5173',           // Desarrollo local
+                    ...devOrigins,                      // localhost:5173 .. 5184 (dev + fallback)
                     'https://www.fabriapp.com',        // Producción principal
                     'https://fabriapp.com',            // Producción sin www
                     process.env.FRONTEND_URL,          // URL desde variable de entorno
