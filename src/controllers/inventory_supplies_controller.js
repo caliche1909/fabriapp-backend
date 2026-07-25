@@ -270,6 +270,8 @@ module.exports = {
 
             // Extraer el id del insumo a actualizar desde los parámetros de la URL
             const { id } = req.params;
+            // 🔒 Compañía activa del usuario autenticado (NO se confía en el company_id del body)
+            const companyId = req.user?.companyId;
 
             // 🔹 Validar datos obligatorios
             if (!company_id || !name || !packaging_type || !packaging_weight || !packaging_unit_id || !packaging_price || !unit_price
@@ -281,8 +283,9 @@ module.exports = {
                 });
             }
 
-            // 🔹 Buscar el insumo a actualizar en la base de datos
-            const supplyDB = await inventory_supplies.findByPk(id);
+            // 🔹 Buscar el insumo a actualizar, SCOPED a la compañía del usuario (evita IDOR
+            //    multi-tenant: checkPermission valida el permiso, no la pertenencia del recurso).
+            const supplyDB = await inventory_supplies.findOne({ where: { id, company_id: companyId } });
             if (!supplyDB) {
                 return res.status(404).json({
                     success: false,
@@ -321,7 +324,7 @@ module.exports = {
                 minimum_stock: minimum_stock
             };
 
-            await inventory_supplies.update(updatedFields, { where: { id } });
+            await inventory_supplies.update(updatedFields, { where: { id, company_id: companyId } });
 
             // 🔹 Obtener el insumo actualizado con sus asociaciones
             const updatedSupply = await inventory_supplies.findByPk(id, {
@@ -384,9 +387,11 @@ module.exports = {
         try {
             // Extraer el id del insumo desde los parámetros de la URL
             const { id } = req.params;
+            // 🔒 Compañía activa del usuario autenticado (aislamiento multi-tenant)
+            const companyId = req.user?.companyId;
 
-            // 🔹 Buscar el insumo a eliminar en la base de datos
-            const supplyDB = await inventory_supplies.findByPk(id);
+            // 🔹 Buscar el insumo a eliminar, SCOPED a la compañía del usuario (evita IDOR)
+            const supplyDB = await inventory_supplies.findOne({ where: { id, company_id: companyId } });
             if (!supplyDB) {
                 return res.status(404).json({
                     success: false,
@@ -395,8 +400,8 @@ module.exports = {
                 });
             }
 
-            // 🔹 Eliminar el insumo de la base de datos
-            await inventory_supplies.destroy({ where: { id } });
+            // 🔹 Eliminar el insumo de la base de datos (scoped por compañía)
+            await inventory_supplies.destroy({ where: { id, company_id: companyId } });
 
             console.log("✅ Insumo eliminado con éxito:", supplyDB);
             res.status(200).json({
@@ -421,9 +426,12 @@ module.exports = {
 
         try {
             const { id } = req.params;
+            // 🔒 Compañía activa del usuario autenticado (aislamiento multi-tenant)
+            const companyId = req.user?.companyId;
 
-            // 🔹 Buscar el insumo con todas sus asociaciones
-            const supply = await inventory_supplies.findByPk(id, {
+            // 🔹 Buscar el insumo con todas sus asociaciones, SCOPED a la compañía (evita IDOR)
+            const supply = await inventory_supplies.findOne({
+                where: { id, company_id: companyId },
                 include: [
                     { model: measurement_units, as: 'packaging_unit' },
                     { model: measurement_units, as: 'portion_unit' },

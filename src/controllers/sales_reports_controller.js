@@ -16,10 +16,6 @@ const { QueryTypes } = require('sequelize');
 // (Colombia). Si el negocio opera en otra zona, cámbiala aquí.
 const TZ = 'America/Bogota';
 
-// Umbral (segundos) para descartar visitas atípicas al calcular el tiempo
-// promedio en tienda (p. ej. visitas que quedaron abiertas). 2h = 7200s.
-const MAX_VISIT_DURATION_SEC = 7200;
-
 // Formatos de agrupación temporal permitidos (whitelist anti-inyección).
 const GRANULARITIES = {
     day: { trunc: 'day', format: 'YYYY-MM-DD' },
@@ -74,17 +70,17 @@ module.exports = {
                 { type: QueryTypes.SELECT, replacements: repl }
             );
 
+            // "visitas" = visitas REALES (status 'visited'/'completed'); las paradas
+            // 'pending' (planificadas al iniciar ruta, aún sin visitar) no cuentan.
             const [visitas] = await sequelize.query(
                 `SELECT
                     COUNT(*)::int AS visitas_total,
                     COALESCE(SUM((sv.sale_amount > 0)::int), 0)::int AS visitas_con_venta,
-                    COALESCE(ROUND(100.0 * SUM((sv.sale_amount > 0)::int) / NULLIF(COUNT(*), 0), 1), 0)::float8 AS efectividad_pct,
-                    ROUND(AVG(EXTRACT(EPOCH FROM (sv.updated_at - sv.created_at)) / 60.0)
-                        FILTER (WHERE sv.sale_amount > 0
-                            AND EXTRACT(EPOCH FROM (sv.updated_at - sv.created_at)) BETWEEN 1 AND ${MAX_VISIT_DURATION_SEC}), 1)::float8 AS tiempo_promedio_min
+                    COALESCE(ROUND(100.0 * SUM((sv.sale_amount > 0)::int) / NULLIF(COUNT(*), 0), 1), 0)::float8 AS efectividad_pct
                  FROM store_visits sv
                  JOIN stores st ON st.id = sv.store_id
                  WHERE st.company_id = :cid
+                   AND sv.status IN ('visited', 'completed')
                    AND (sv.date AT TIME ZONE :tz)::date BETWEEN :from AND :to`,
                 { type: QueryTypes.SELECT, replacements: repl }
             );
@@ -312,6 +308,77 @@ module.exports = {
     },
 
     /**
+     * 📌 GET /api/sales/reports/no-sale/detail?from&to&page&limit&categoryId&reasonId&sellerId&storeId
+     * Lista PAGINADA de reportes de no-venta INDIVIDUALES (detalle) de la compañía, con
+     * tienda, vendedor, cliente, categoría/razón, comentario y fecha. Solo lectura, scopeado
+     * por `req.user.companyId`. Complementa el agregado getNoSaleReport (drill-down).
+     */
+    async getNoSaleReportDetail(req, res) {
+        try {
+            const cid = req.user.companyId;
+            const { from, to } = await resolveRange(cid, req.query.from, req.query.to);
+
+            // Paginación con topes defensivos.
+            const page = Math.max(1, parseInt(req.query.page) || 1);
+            const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
+            const offset = (page - 1) * limit;
+
+            // Filtros opcionales (todos parametrizados para evitar inyección).
+            const { categoryId, reasonId, sellerId, storeId } = req.query;
+            const repl = { cid, tz: TZ, from, to, limit, offset };
+            let WHERE = `r.company_id = :cid AND (r.created_at AT TIME ZONE :tz)::date BETWEEN :from AND :to`;
+            if (categoryId) { WHERE += ' AND r.category_id = :categoryId'; repl.categoryId = categoryId; }
+            if (reasonId) { WHERE += ' AND r.reason_id = :reasonId'; repl.reasonId = reasonId; }
+            if (sellerId) { WHERE += ' AND r.user_id = :sellerId'; repl.sellerId = sellerId; }
+            if (storeId) { WHERE += ' AND r.store_id = :storeId'; repl.storeId = storeId; }
+
+            const [tot] = await sequelize.query(
+                `SELECT COUNT(*)::int AS total FROM store_no_sale_reports r WHERE ${WHERE}`,
+                { type: QueryTypes.SELECT, replacements: repl }
+            );
+
+            const reportes = await sequelize.query(
+                `SELECT r.id,
+                        r.created_at AS fecha,
+                        st.name AS tienda,
+                        TRIM(u.first_name || ' ' || COALESCE(u.last_name, '')) AS vendedor,
+                        c.name AS categoria,
+                        rs.name AS razon,
+                        r.comments AS comentario,
+                        r.client_name AS cliente,
+                        r.client_phone AS telefono
+                 FROM store_no_sale_reports r
+                 JOIN stores st ON st.id = r.store_id
+                 LEFT JOIN users u ON u.id = r.user_id
+                 JOIN no_sale_categories c ON c.id = r.category_id
+                 JOIN no_sale_reasons rs ON rs.id = r.reason_id
+                 WHERE ${WHERE}
+                 ORDER BY r.created_at DESC
+                 LIMIT :limit OFFSET :offset`,
+                { type: QueryTypes.SELECT, replacements: repl }
+            );
+
+            const total = tot ? tot.total : 0;
+            return res.status(200).json({
+                success: true,
+                data: {
+                    range: { from, to },
+                    reportes,
+                    pagination: {
+                        currentPage: page,
+                        totalPages: Math.ceil(total / limit) || 1,
+                        totalReports: total,
+                        limit,
+                    },
+                },
+            });
+        } catch (error) {
+            console.error('Error en getNoSaleReportDetail (detalle de no-venta):', error);
+            return res.status(500).json({ success: false, message: 'Error al obtener el detalle de no-venta' });
+        }
+    },
+
+    /**
      * 📌 GET /api/sales/reports/sellers
      * Lista de vendedores (miembros activos de la compañía) para los selectores.
      */
@@ -365,7 +432,9 @@ module.exports = {
             // Para la cobertura de rutas el vendedor es el ASIGNADO a la ruta (routes.user_id).
             const routeUserFilter = userId ? 'AND r.user_id = :user_id' : '';
 
+            // Solo visitas REALES (no las paradas 'pending' planificadas sin visitar).
             const VISITS_WHERE = `st.company_id = :cid
+                AND sv.status IN ('visited', 'completed')
                 AND (sv.date AT TIME ZONE :tz)::date BETWEEN :from AND :to ${visitUserFilter}`;
             const CUADRE_SALES_WHERE = `sa.company_id = :cid AND sa.deleted_at IS NULL AND sa.status = 'completed'
                 AND (sa.sale_date AT TIME ZONE :tz)::date BETWEEN :from AND :to ${saleUserFilter}`;
@@ -418,14 +487,20 @@ module.exports = {
                       ${routeUserFilter}
                 ),
                 tiendas_prog AS (
-                    SELECT s.id AS store_id, rp.user_id AS seller_id
-                    FROM stores s JOIN rutas_periodo rp ON rp.id = s.route_id
+                    -- La relación tienda↔ruta vive en routes_stores (M2M); stores.route_id
+                    -- se eliminó en la Fase 7. Cada par (tienda, ruta activa del período) es
+                    -- una parada programada, con el vendedor asignado a esa ruta.
+                    SELECT rs.store_id AS store_id, rp.user_id AS seller_id
+                    FROM routes_stores rs
+                    JOIN rutas_periodo rp ON rp.id = rs.route_id
+                    JOIN stores s ON s.id = rs.store_id
                     WHERE s.deleted_at IS NULL
                 ),
                 marcadas AS (
                     SELECT tp.store_id, tp.seller_id,
                         EXISTS (SELECT 1 FROM store_visits sv
                                 WHERE sv.store_id = tp.store_id
+                                  AND sv.status IN ('visited', 'completed')
                                   AND (sv.date AT TIME ZONE :tz)::date BETWEEN :from AND :to) AS visitada
                     FROM tiendas_prog tp
                 )`;

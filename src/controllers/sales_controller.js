@@ -100,19 +100,11 @@ module.exports = {
                 status: 'completed'
             }, { transaction });
 
-            // 5. 🏪 Marcar la tienda como 'completed' cuando se registra una venta
-            await Stores.update(
-                { current_visit_status: 'completed' },
-                {
-                    where: { id: store_id },
-                    transaction
-                }
-            );
-
-            // 6. 💰 Actualizar el monto de venta en la visita (si existe visit_id)
+            // 5. 💰 Actualizar la visita: monto vendido + avanzar a 'completed'.
+            // (El estado de visita vive en store_visits; ya no se toca la tienda.)
             if (visit_id) {
                 await StoreVisits.update(
-                    { sale_amount: total_amount },
+                    { sale_amount: total_amount, status: 'completed' },
                     {
                         where: { id: visit_id },
                         transaction

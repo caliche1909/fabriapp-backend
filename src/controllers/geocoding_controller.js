@@ -1,3 +1,31 @@
+// Extrae de address_components de Google el primer componente cuyo `types`
+// contenga alguno de los tipos pedidos. Devuelve long_name o '' si no existe.
+const getComponent = (components, types) => {
+    const match = components.find(c => types.some(t => c.types.includes(t)));
+    return match ? match.long_name : '';
+};
+
+// Consulta la zona horaria IANA (ej. 'America/Bogota') para unas coordenadas
+// usando la Google Time Zone API. No es crítica: si falla, devuelve null y el
+// flujo de geocodificación continúa igual.
+const fetchTimezone = async (lat, lng, apiKey) => {
+    try {
+        // La API exige un timestamp (para resolver horario de verano); el momento actual sirve.
+        const timestamp = Math.floor(Date.now() / 1000);
+        const url = `https://maps.googleapis.com/maps/api/timezone/json?location=${lat},${lng}&timestamp=${timestamp}&key=${apiKey}`;
+        const response = await fetch(url);
+        const data = await response.json();
+        if (data.status === 'OK' && data.timeZoneId) {
+            return data.timeZoneId;
+        }
+        console.warn('⚠️ [TIMEZONE] Google Time Zone API status:', data.status, data.errorMessage || '');
+        return null;
+    } catch (error) {
+        console.error('❌ [TIMEZONE] Error consultando Time Zone API:', error.message);
+        return null;
+    }
+};
+
 module.exports = {
 
     async reverseGeocoding(req, res) {
@@ -29,9 +57,30 @@ module.exports = {
             const response = await fetch(url);
             const data = await response.json();
 
-            console.log('🔧 [GEOCODING BACKEND] Google API Status:', data.status);            if (data.status === "OK" && data.results.length > 0) {
-                const address = data.results[0].formatted_address;
-                const parts = address.split(",").map(item => item.trim());
+            console.log('🔧 [GEOCODING BACKEND] Google API Status:', data.status);
+
+            if (data.status === "OK" && data.results.length > 0) {
+                const result = data.results[0];
+                const address = result.formatted_address;
+                const components = result.address_components || [];
+
+                // Parseo robusto desde address_components (mejor que partir la cadena por comas).
+                const route = getComponent(components, ['route']);
+                const streetNumber = getComponent(components, ['street_number']);
+                const street = [route, streetNumber].filter(Boolean).join(' ').trim();
+
+                const parts = {
+                    // Dirección de calle; si no hay route, caer al primer fragmento de la dirección formateada.
+                    address: street || address.split(',')[0].trim(),
+                    neighborhood: getComponent(components, ['neighborhood', 'sublocality', 'sublocality_level_1']),
+                    city: getComponent(components, ['locality', 'administrative_area_level_2']),
+                    state: getComponent(components, ['administrative_area_level_1']),
+                    country: getComponent(components, ['country']),
+                    postalCode: getComponent(components, ['postal_code'])
+                };
+
+                // Zona horaria de la ubicación (llamada aparte a la Time Zone API; no crítica).
+                const timezone = await fetchTimezone(lat, lng, apiKey);
 
                 return res.status(200).json({
                     success: true,
@@ -39,12 +88,8 @@ module.exports = {
                     message: 'Dirección encontrada exitosamente',
                     address: address,
                     fullAddress: address, // Mantener compatibilidad
-                    parts: {
-                        address: parts[0] || '',
-                        city: parts[1] || '',
-                        state: parts[2] || '',
-                        country: parts[3] || ''
-                    }
+                    parts,
+                    timezone // IANA (ej. 'America/Bogota') o null si no se pudo resolver
                 });
             } else {
                 return res.status(404).json({
@@ -68,6 +113,3 @@ module.exports = {
         }
     }
 };
-
-
-

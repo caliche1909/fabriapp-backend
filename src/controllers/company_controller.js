@@ -1,16 +1,19 @@
-const { companies } = require('../models');
+const { companies, users, user_companies } = require('../models');
 
 module.exports = {
 
-    // 📌 METODO PARA ACTUALIZAR EL IS_DEFAULT DE LA EMPRESA A TRUE
+    // 📌 METODO PARA ESTABLECER LA COMPAÑÍA PREDETERMINADA DEL USUARIO (uso interno/auto-set)
+    // ⚠️ El "predeterminado" vive en user_companies.is_default (por-usuario), NO en companies.
+    //    (companies no tiene columna is_default). Usa el método setAsDefault() que resetea las
+    //    demás compañías del usuario de forma transaccional. Sin contraseña: es el auto-set inicial.
     async updateIsDefaultTrue(req, res) {
         try {
-            const { id } = req.params;          
-            
+            const { id } = req.params;
+            const userId = req.user?.id;
 
             // Verificar que la compañía existe
             const company = await companies.findByPk(id);
-            
+
             if (!company) {
                 return res.status(404).json({
                     success: false,
@@ -28,22 +31,121 @@ module.exports = {
                 });
             }
 
-            // Actualizar is_default a true (el trigger se encargará del resto)
-            await company.update({ is_default: true });            
+            // 🔒 Validar que el usuario pertenece (activo) a la compañía (evita IDOR multi-tenant)
+            const membership = await user_companies.findOne({
+                where: { user_id: userId, company_id: id, status: 'active' }
+            });
+
+            if (!membership) {
+                return res.status(403).json({
+                    success: false,
+                    status: 403,
+                    message: 'No perteneces a esta compañía'
+                });
+            }
+
+            // ✅ Marcarla como predeterminada del usuario (resetea las demás, transaccional)
+            await membership.setAsDefault();
 
             res.status(200).json({
                 success: true,
                 status: 200,
-                message: `La compañía ${company.name} esta operando`,                
+                message: `La compañía ${company.name} esta operando`,
             });
 
         } catch (error) {
             console.error('❌ Error al actualizar is_default:', error);
-            res.status(500).json({ 
+            res.status(500).json({
                 success: false,
                 status: 500,
                 message: 'Error interno del servidor al actualizar la compañía predeterminada',
-                error: error.message 
+                error: error.message
+            });
+        }
+    },
+
+    // 📌 CAMBIO MANUAL DE COMPAÑÍA PREDETERMINADA — requiere CONTRASEÑA del usuario.
+    //    Flujo: el usuario elige otra compañía en el selector → confirma con su contraseña →
+    //    validamos identidad + membresía → la marcamos como predeterminada. El frontend luego
+    //    hace logout y redirige a login para recargar la app limpia con la nueva compañía.
+    async switchDefaultCompany(req, res) {
+        try {
+            const { id } = req.params;        // compañía destino
+            const userId = req.user?.id;      // usuario autenticado (del token)
+            const { password } = req.body;
+
+            if (!password) {
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: 'La contraseña es requerida'
+                });
+            }
+
+            // 🔐 Validar identidad con la contraseña del usuario autenticado
+            const user = await users.findByPk(userId);
+            if (!user) {
+                return res.status(404).json({
+                    success: false,
+                    status: 404,
+                    message: 'Usuario no encontrado'
+                });
+            }
+
+            const isValidPassword = await user.validatePassword(password);
+            if (!isValidPassword) {
+                return res.status(401).json({
+                    success: false,
+                    status: 401,
+                    message: 'Contraseña incorrecta'
+                });
+            }
+
+            // Verificar que la compañía destino existe y está activa
+            const company = await companies.findByPk(id);
+            if (!company) {
+                return res.status(404).json({
+                    success: false,
+                    status: 404,
+                    message: 'Compañía no encontrada'
+                });
+            }
+            if (!company.is_active) {
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: 'No se puede seleccionar una compañía inactiva'
+                });
+            }
+
+            // 🔒 Validar que el usuario pertenece (activo) a la compañía destino (evita IDOR)
+            const membership = await user_companies.findOne({
+                where: { user_id: userId, company_id: id, status: 'active' }
+            });
+            if (!membership) {
+                return res.status(403).json({
+                    success: false,
+                    status: 403,
+                    message: 'No perteneces a esta compañía o tu vínculo no está activo'
+                });
+            }
+
+            // ✅ Marcarla como predeterminada del usuario (resetea las demás, transaccional)
+            await membership.setAsDefault();
+
+            res.status(200).json({
+                success: true,
+                status: 200,
+                message: 'Compañía predeterminada actualizada. Vuelve a iniciar sesión.'
+            });
+
+        } catch (error) {
+            console.error('❌ Error al cambiar de compañía predeterminada:', error);
+            res.status(500).json({
+                success: false,
+                status: 500,
+                message: 'Error interno del servidor al cambiar de compañía',
+                error: error.message
             });
         }
     },
@@ -52,6 +154,7 @@ module.exports = {
     async updateCompanyById(req, res) {
         try {
             const { id } = req.params;
+            const companyId = req.user?.companyId; // 🔒 compañía activa del usuario autenticado
             const {
                 name,
                 legalName,
@@ -66,10 +169,20 @@ module.exports = {
                 neighborhood,
                 website,
                 logoUrl,
+                timezone,
                 latitude,
                 longitude
             } = req.body;
-            
+
+            // 🔒 Solo se puede editar la propia compañía activa (evita IDOR multi-tenant:
+            // checkPermission valida el permiso, no la pertenencia del recurso).
+            if (id !== companyId) {
+                return res.status(403).json({
+                    success: false,
+                    status: 403,
+                    message: 'No tiene permiso para modificar esta compañía'
+                });
+            }
 
             // Verificar que la compañía existe
             const company = await companies.findByPk(id);
@@ -80,6 +193,20 @@ module.exports = {
                     status: 404,
                     message: 'Compañía no encontrada'
                 });
+            }
+
+            // Validar la zona horaria si viene: debe ser un identificador IANA válido.
+            // Intl.DateTimeFormat lanza RangeError si la zona no existe.
+            if (timezone !== undefined && timezone !== null && timezone !== '') {
+                try {
+                    Intl.DateTimeFormat('en-US', { timeZone: timezone });
+                } catch (tzError) {
+                    return res.status(400).json({
+                        success: false,
+                        status: 400,
+                        message: `La zona horaria "${timezone}" no es válida`
+                    });
+                }
             }
 
             // Preparar los datos para actualizar
@@ -100,6 +227,9 @@ module.exports = {
                 neighborhood: neighborhood !== undefined ? (neighborhood === '' ? null : neighborhood) : company.neighborhood,
                 website: website !== undefined ? (website === '' ? null : website) : company.website,
                 logo_url: logoUrl !== undefined ? (logoUrl === '' ? null : logoUrl) : company.logo_url,
+
+                // Zona horaria: campo obligatorio en BD; si viene vacío/nulo, conservar el valor anterior.
+                timezone: (timezone !== undefined && timezone !== null && timezone !== '') ? timezone : company.timezone,
             };
 
             // Si se proporcionaron coordenadas, actualizar la ubicación
@@ -162,6 +292,7 @@ module.exports = {
                 neighborhood: updatedCompany.neighborhood,
                 website: updatedCompany.website,
                 logoUrl: updatedCompany.logo_url,
+                timezone: updatedCompany.timezone,
                 latitude: responseLatitude,
                 longitude: responseLongitude,
             }

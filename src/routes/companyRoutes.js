@@ -19,6 +19,16 @@ const changeDefaultCompanyLimiter = createSmartRateLimit({
     enableOwnerBonus: false          // Sin bonus para esta operación específica
 });
 
+// 🛡️ LIMITADOR MÁS ESTRICTO PARA EL CAMBIO MANUAL CON CONTRASEÑA (protege contra fuerza bruta)
+const switchDefaultCompanyLimiter = createSmartRateLimit({
+    windowMs: 15 * 60 * 1000,        // 15 minutos
+    maxByIP: 20,                     // 20 intentos por IP
+    maxByUser: 10,                   // 10 intentos por usuario cada 15 minutos
+    message: "Demasiados intentos de cambio de compañía. Intente más tarde.",
+    trustedIPs: [],
+    enableOwnerBonus: false
+});
+
 // api/company/
 
 // 🔄 CAMBIAR EMPRESA POR DEFECTO - Límite específico (30/15min)
@@ -35,6 +45,15 @@ router.put('/update/:id',
     verifyToken,                     // Verificar autenticación
     checkPermission('update_company_settings'), // Verificar permisos
     companyController.updateCompanyById
+);
+
+// 🔐 CAMBIO MANUAL DE COMPAÑÍA POR DEFECTO (requiere contraseña) - acción personal del usuario.
+// Sin checkPermission: cualquier miembro puede cambiar su propia compañía por defecto; la
+// autorización real la dan la contraseña + la validación de membresía en el controlador.
+router.put('/switch-default/:id',
+    verifyToken,                     // Verificar autenticación
+    switchDefaultCompanyLimiter,     // Rate limiting estricto (anti fuerza bruta)
+    companyController.switchDefaultCompany
 );
 
 module.exports = router;

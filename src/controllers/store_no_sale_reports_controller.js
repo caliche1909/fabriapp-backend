@@ -1,10 +1,13 @@
-const { store_no_sale_reports, no_sale_categories, no_sale_reasons, stores, users, routes, companies, store_visits, sales } = require('../models');
+const { store_no_sale_reports, stores, store_visits, sales } = require('../models');
 const { ValidationError, ForeignKeyConstraintError } = require('sequelize');
 
 
 const StoreNoSaleReportsController = {
 
     // 📌 MÉTODO PARA CREAR UN REPORTE DE NO-VENTA
+    // Único endpoint de este dominio usado por el frontend (DialogNoSaleReport). La
+    // consulta/detalle de reportes vive en el módulo de sales (getNoSaleReport +
+    // getNoSaleReportDetail), scopeado por compañía y con checkPermission('view_reports').
     async createNoSaleReport(req, res) {
         // 🔄 Iniciar transacción para garantizar consistencia
         const transaction = await store_no_sale_reports.sequelize.transaction();
@@ -35,8 +38,9 @@ const StoreNoSaleReportsController = {
                 });
             }
 
-            // Verificar que la tienda exista
-            const store = await stores.findByPk(store_id, { transaction });
+            // Verificar que la tienda exista y sea de la compañía del usuario (aislamiento
+            // multi-tenant: no permitir crear un reporte referenciando una tienda ajena).
+            const store = await stores.findOne({ where: { id: store_id, company_id }, transaction });
             if (!store) {
                 await transaction.rollback();
                 return res.status(404).json({
@@ -46,8 +50,10 @@ const StoreNoSaleReportsController = {
                 });
             }
 
-            // verificar que la tienda este visitada antes de generer el reporte
-            if (visit_id !== store.current_visit_id || store.current_visit_status === 'pending') {
+            // Verificar que exista la visita del día para esta tienda y que esté
+            // 'visited' (el estado de visita vive en store_visits, no en la tienda).
+            const dayVisit = visit_id ? await store_visits.findByPk(visit_id, { transaction }) : null;
+            if (!dayVisit || dayVisit.store_id !== parseInt(store_id) || dayVisit.status === 'pending') {
                 await transaction.rollback();
                 return res.status(400).json({
                     success: false,
@@ -106,14 +112,16 @@ const StoreNoSaleReportsController = {
                 client_phone: client_phone ? client_phone.trim() : null
             }, { transaction });
 
-            // 🏪 Marcar la tienda como 'completed' después de crear el reporte de no-venta
-            await stores.update(
-                { current_visit_status: 'completed' },
-                {
-                    where: { id: store_id },
-                    transaction
-                }
-            );
+            // (D4) Tras el reporte de no-venta la visita se CONCLUYE como 'completed'
+            // (sin venta: sale_amount permanece en 0). Así ambos desenlaces —venta o
+            // no-venta— cierran la visita, diferenciándose solo por sale_amount (>0 vs 0).
+            // El estado de visita vive en store_visits; no se toca la tienda.
+            if (visit_id) {
+                await store_visits.update(
+                    { status: 'completed' },
+                    { where: { id: visit_id }, transaction }
+                );
+            }
 
             // ✅ Confirmar la transacción
             await transaction.commit();
@@ -121,7 +129,7 @@ const StoreNoSaleReportsController = {
             res.status(201).json({
                 success: true,
                 status: 201,
-                message: 'El reporte de NO VENTA se ha creado exitosamente y la tienda ha sido marcada como completada'
+                message: 'El reporte de NO VENTA se ha creado exitosamente'
             });
 
         } catch (error) {
@@ -177,296 +185,6 @@ const StoreNoSaleReportsController = {
                 success: false,
                 status: 500,
                 message: 'Error interno del servidor al crear el reporte'
-            });
-        }
-    },
-
-    // 📌 MÉTODO PARA OBTENER REPORTES POR COMPAÑÍA
-    async getReportsByCompany(req, res) {
-        try {
-            const { companyId } = req.params;
-            const { page = 1, limit = 10, startDate, endDate, categoryId, reasonId, userId, storeId } = req.query;
-
-            const offset = (page - 1) * limit;
-            const whereConditions = {};
-
-            // Filtros opcionales
-            if (startDate && endDate) {
-                whereConditions.created_at = {
-                    [require('sequelize').Op.between]: [new Date(startDate), new Date(endDate)]
-                };
-            }
-            if (categoryId) whereConditions.category_id = categoryId;
-            if (reasonId) whereConditions.reason_id = reasonId;
-            if (userId) whereConditions.user_id = userId;
-            if (storeId) whereConditions.store_id = storeId;
-
-            const reports = await store_no_sale_reports.findByCompany(companyId, {
-                where: whereConditions,
-                limit: parseInt(limit),
-                offset: parseInt(offset)
-            });
-
-            const totalReports = await store_no_sale_reports.count({
-                where: {
-                    company_id: companyId,
-                    ...whereConditions
-                }
-            });
-
-            res.status(200).json({
-                success: true,
-                status: 200,
-                data: {
-                    reports,
-                    pagination: {
-                        currentPage: parseInt(page),
-                        totalPages: Math.ceil(totalReports / limit),
-                        totalReports,
-                        limit: parseInt(limit)
-                    }
-                }
-            });
-
-        } catch (error) {
-            console.error('Error al obtener reportes por compañía:', error);
-            res.status(500).json({
-                success: false,
-                status: 500,
-                message: 'Error interno del servidor'
-            });
-        }
-    },
-
-    // 📌 MÉTODO PARA OBTENER REPORTES POR USUARIO
-    async getReportsByUser(req, res) {
-        try {
-            const { userId } = req.params;
-            const { page = 1, limit = 10, startDate, endDate } = req.query;
-
-            const offset = (page - 1) * limit;
-            const whereConditions = {};
-
-            if (startDate && endDate) {
-                whereConditions.created_at = {
-                    [require('sequelize').Op.between]: [new Date(startDate), new Date(endDate)]
-                };
-            }
-
-            const reports = await store_no_sale_reports.findByUser(userId, {
-                where: whereConditions,
-                limit: parseInt(limit),
-                offset: parseInt(offset)
-            });
-
-            const totalReports = await store_no_sale_reports.count({
-                where: {
-                    user_id: userId,
-                    ...whereConditions
-                }
-            });
-
-            res.status(200).json({
-                success: true,
-                status: 200,
-                data: {
-                    reports,
-                    pagination: {
-                        currentPage: parseInt(page),
-                        totalPages: Math.ceil(totalReports / limit),
-                        totalReports,
-                        limit: parseInt(limit)
-                    }
-                }
-            });
-
-        } catch (error) {
-            console.error('Error al obtener reportes por usuario:', error);
-            res.status(500).json({
-                success: false,
-                status: 500,
-                message: 'Error interno del servidor'
-            });
-        }
-    },
-
-    // 📌 MÉTODO PARA OBTENER ESTADÍSTICAS POR CATEGORÍA
-    async getStatsByCategory(req, res) {
-        try {
-            const { companyId } = req.params;
-            const { startDate, endDate } = req.query;
-
-            const stats = await store_no_sale_reports.getStatsByCategory(companyId, {
-                startDate: startDate ? new Date(startDate) : null,
-                endDate: endDate ? new Date(endDate) : null
-            });
-
-            res.status(200).json({
-                success: true,
-                status: 200,
-                data: stats
-            });
-
-        } catch (error) {
-            console.error('Error al obtener estadísticas:', error);
-            res.status(500).json({
-                success: false,
-                status: 500,
-                message: 'Error interno del servidor'
-            });
-        }
-    },
-
-    // 📌 MÉTODO PARA OBTENER UN REPORTE ESPECÍFICO
-    async getReportById(req, res) {
-        try {
-            const { reportId } = req.params;
-
-            const report = await store_no_sale_reports.findByPk(reportId, {
-                include: [
-                    { model: stores, as: 'store' },
-                    { model: users, as: 'user', attributes: ['id', 'name', 'email'] },
-                    { model: no_sale_categories, as: 'category' },
-                    { model: no_sale_reasons, as: 'reason' },
-                    { model: routes, as: 'route', required: false },
-                    { model: store_visits, as: 'visit', required: false },
-                    { model: companies, as: 'company', attributes: ['id', 'name'] }
-                ]
-            });
-
-            if (!report) {
-                return res.status(404).json({
-                    success: false,
-                    status: 404,
-                    message: 'Reporte de no-venta no encontrado'
-                });
-            }
-
-            res.status(200).json({
-                success: true,
-                status: 200,
-                data: report
-            });
-
-        } catch (error) {
-            console.error('Error al obtener reporte:', error);
-            res.status(500).json({
-                success: false,
-                status: 500,
-                message: 'Error interno del servidor'
-            });
-        }
-    },
-
-    // 📌 MÉTODO PARA ACTUALIZAR UN REPORTE
-    async updateReport(req, res) {
-        try {
-            const { reportId } = req.params;
-            const {
-                category_id,
-                reason_id,
-                comments,
-                client_name,
-                client_phone
-            } = req.body;
-
-            const report = await store_no_sale_reports.findByPk(reportId);
-
-            if (!report) {
-                return res.status(404).json({
-                    success: false,
-                    status: 404,
-                    message: 'Reporte de no-venta no encontrado'
-                });
-            }
-
-            // Preparar datos de actualización
-            const updateData = {};
-            if (category_id) updateData.category_id = category_id;
-            if (reason_id) updateData.reason_id = reason_id;
-            if (comments) updateData.comments = comments.trim();
-            if (client_name !== undefined) updateData.client_name = client_name ? client_name.trim() : null;
-            if (client_phone !== undefined) updateData.client_phone = client_phone ? client_phone.trim() : null;
-
-            // Actualizar el reporte
-            await report.update(updateData);
-
-            // Si se cambió la categoría o razón, validar compatibilidad
-            if (category_id || reason_id) {
-                await report.validateCategoryReason();
-            }
-
-            // Obtener el reporte actualizado con todas las relaciones
-            const updatedReport = await store_no_sale_reports.findByPk(reportId, {
-                include: [
-                    { model: stores, as: 'store' },
-                    { model: users, as: 'user', attributes: ['id', 'name', 'email'] },
-                    { model: no_sale_categories, as: 'category' },
-                    { model: no_sale_reasons, as: 'reason' },
-                    { model: routes, as: 'route', required: false },
-                    { model: store_visits, as: 'visit', required: false }
-                ]
-            });
-
-            res.status(200).json({
-                success: true,
-                status: 200,
-                message: 'Reporte actualizado exitosamente',
-                data: updatedReport
-            });
-
-        } catch (error) {
-            console.error('Error al actualizar reporte:', error);
-
-            if (error instanceof ValidationError) {
-                return res.status(400).json({
-                    success: false,
-                    status: 400,
-                    message: 'Error de validación',
-                    errors: error.errors.map(err => ({
-                        field: err.path,
-                        message: err.message
-                    }))
-                });
-            }
-
-            res.status(500).json({
-                success: false,
-                status: 500,
-                message: 'Error interno del servidor'
-            });
-        }
-    },
-
-    // 📌 MÉTODO PARA ELIMINAR UN REPORTE
-    async deleteReport(req, res) {
-        try {
-            const { reportId } = req.params;
-
-            const report = await store_no_sale_reports.findByPk(reportId);
-
-            if (!report) {
-                return res.status(404).json({
-                    success: false,
-                    status: 404,
-                    message: 'Reporte de no-venta no encontrado'
-                });
-            }
-
-            await report.destroy();
-
-            res.status(200).json({
-                success: true,
-                status: 200,
-                message: 'Reporte eliminado exitosamente'
-            });
-
-        } catch (error) {
-            console.error('Error al eliminar reporte:', error);
-            res.status(500).json({
-                success: false,
-                status: 500,
-                message: 'Error interno del servidor'
             });
         }
     }

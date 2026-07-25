@@ -173,9 +173,17 @@ module.exports = function (sequelize, DataTypes) {
       as: 'route_type'
     });
 
-    Routes.hasMany(models.stores, {
+    // 🔗 Relación MUCHOS-A-MUCHOS con tiendas vía routes_stores (única fuente de la
+    // relación ruta↔tienda; la antigua 1→N `stores`/`route_id` se eliminó en Fase 7).
+    Routes.hasMany(models.routes_stores, {
       foreignKey: "route_id",
-      as: "stores"
+      as: "route_stores"
+    });
+    Routes.belongsToMany(models.stores, {
+      through: models.routes_stores,
+      foreignKey: "route_id",
+      otherKey: "store_id",
+      as: "member_stores"
     });
 
     // 📊 Relación con StoreNoSaleReports - Una ruta puede tener muchos reportes de no-venta

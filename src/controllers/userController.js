@@ -140,7 +140,7 @@ module.exports = {
                             include: [
                                 'id', 'name', 'legal_name', 'tax_id', 'email', 'phone',
                                 'address', 'city', 'state', 'country', 'postal_code',
-                                'neighborhood', 'logo_url', 'logo_public_id', 'website', 'is_active',
+                                'neighborhood', 'logo_url', 'logo_public_id', 'website', 'timezone', 'is_active',
                                 // Extraer coordenadas del campo PostGIS ubicacion
                                 [sequelize.fn('ST_Y', sequelize.col('company.ubicacion')), 'latitude'],
                                 [sequelize.fn('ST_X', sequelize.col('company.ubicacion')), 'longitude']
@@ -307,6 +307,7 @@ module.exports = {
                     logoUrl: userCompany.company.logo_url,
                     logoPublicId: userCompany.company.logo_public_id,
                     website: userCompany.company.website,
+                    timezone: userCompany.company.timezone,
                     latitude: latitude,
                     longitude: longitude,
                     isActive: userCompany.company.is_active,
@@ -434,6 +435,17 @@ module.exports = {
         try {
             const { id } = req.params;
             const { name, lastName, phone } = req.body;
+
+            // 🔒 Este endpoint es solo para el perfil propio (permiso 'update_personal_user').
+            // Para que un administrador edite a otros usuarios existe
+            // PUT /update-users-of-company/:id con el permiso 'update_users'.
+            if (String(id) !== String(req.user?.id)) {
+                return res.status(403).json({
+                    success: false,
+                    status: 403,
+                    message: "Solo puede actualizar su propio perfil"
+                });
+            }
 
             const user = await users.findByPk(id);
             if (!user) {

@@ -5,6 +5,30 @@ const stream = require('stream');
 const { store_images, stores, sequelize, users, user_companies, companies } = require('../models');
 const { notifyAdmin } = require('../utils/emailNotifier');
 
+/**
+ * 🔒 Autorización para gestionar la imagen de perfil de `targetUserId`.
+ * Se permite si el solicitante es:
+ *   (a) el propio usuario (flujo "Mi perfil"), o
+ *   (b) un miembro de la misma compañía y el objetivo también lo es y está ACTIVO
+ *       (flujo "Crear/editar usuario", donde un admin gestiona la foto de un colaborador).
+ * Evita el IDOR de sobrescribir/borrar la foto de un usuario de OTRA compañía.
+ * NOTA: no se puede forzar `targetUserId === req.user.id` porque rompería CreateUser.tsx.
+ */
+const canManageUserImage = async (targetUserId, req) => {
+    const requesterId = req.user?.id;
+    const companyId = req.user?.companyId;
+
+    if (!targetUserId || !requesterId) return false;
+    if (String(targetUserId) === String(requesterId)) return true; // su propia imagen
+
+    if (!companyId) return false;
+    const membership = await user_companies.findOne({
+        where: { user_id: targetUserId, company_id: companyId, status: 'active' },
+        attributes: ['id']
+    });
+    return !!membership;
+};
+
 module.exports = {
 
     // Método para eliminar una imagen de perfil de usuario
@@ -31,6 +55,16 @@ module.exports = {
                 });
             }
 
+            // 🔒 PASO 2.1: Solo su propia imagen o la de un miembro activo de su compañía
+            const authorized = await canManageUserImage(userId, req);
+            if (!authorized) {
+                return res.status(403).json({
+                    success: false,
+                    status: 403,
+                    message: 'No tiene permiso para eliminar la imagen de este usuario'
+                });
+            }
+
 
             // ✅ PASO 3: Validar que publicId esté presente
             if (!publicId || publicId.trim() === '') {
@@ -40,6 +74,10 @@ module.exports = {
                     message: 'Falta la llave de eliminacion de la imagen'
                 });
             }            
+
+            // 🔒 PASO 4.1: NO confiar en el publicId del cliente. Se usa el guardado en BD
+            //    para no permitir borrar un asset arbitrario de Cloudinary (incluso de otra compañía).
+            const publicIdToDelete = userInDb.image_public_id;
 
             // ✅ PASO 5: Iniciar transacción
             const transaction = await sequelize.transaction();
@@ -51,8 +89,20 @@ module.exports = {
                     image_url: null
                 }, { transaction });
 
-                // ✅ PASO 7: Eliminar de Cloudinary DESPUÉS
-                const deleteResult = await cloudinary.uploader.destroy(publicId);
+                // Si en BD no hay imagen asociada, no hay nada que borrar en Cloudinary.
+                if (!publicIdToDelete) {
+                    await transaction.commit();
+                    return res.status(200).json({
+                        success: true,
+                        status: 200,
+                        message: 'Imagen de perfil eliminada exitosamente',
+                        imageUrl: null,
+                        imagePublicId: null
+                    });
+                }
+
+                // ✅ PASO 7: Eliminar de Cloudinary DESPUÉS (con el publicId de la BD)
+                const deleteResult = await cloudinary.uploader.destroy(publicIdToDelete);
 
 
                 // ✅ PASO 8: Evaluar resultado de Cloudinary
@@ -174,6 +224,9 @@ module.exports = {
                 });
             }
 
+            // 🔒 PASO 4.1: NO confiar en el publicId del cliente; usar el guardado en BD.
+            const logoPublicIdToDelete = companyInDb.logo_public_id;
+
             // ✅ PASO 5: Iniciar transacción
             const transaction = await sequelize.transaction();
 
@@ -184,8 +237,20 @@ module.exports = {
                     logo_url: null
                 }, { transaction });
 
-                // ✅ PASO 7: Eliminar de Cloudinary DESPUÉS
-                const deleteResult = await cloudinary.uploader.destroy(publicId);
+                // Si en BD no hay logo asociado, no hay nada que borrar en Cloudinary.
+                if (!logoPublicIdToDelete) {
+                    await transaction.commit();
+                    return res.status(200).json({
+                        success: true,
+                        status: 200,
+                        message: 'Logo eliminado exitosamente',
+                        logoUrl: null,
+                        logoPublicId: null
+                    });
+                }
+
+                // ✅ PASO 7: Eliminar de Cloudinary DESPUÉS (con el publicId de la BD)
+                const deleteResult = await cloudinary.uploader.destroy(logoPublicIdToDelete);
 
                 // ✅ PASO 8: Evaluar resultado de Cloudinary
                 if (deleteResult.result === 'ok') {
@@ -271,7 +336,23 @@ module.exports = {
         try {
 
 
-            // 🔸 PASO 1: Verificar existencia en AMBOS lugares primero          
+            // 🔸 PASO 1: Verificar existencia en AMBOS lugares primero
+
+            // 🔒 1.0 La tienda debe pertenecer a la compañía del usuario (evita borrar
+            //     imágenes de tiendas de otra compañía — IDOR multi-tenant).
+            const storeOwner = await stores.findOne({
+                where: { id: storeId, company_id: req.user?.companyId },
+                transaction
+            });
+            if (!storeOwner) {
+                await transaction.rollback();
+                return res.status(404).json({
+                    success: false,
+                    status: 404,
+                    message: 'Tienda no encontrada',
+                    store: null
+                });
+            }
 
             // 1.1 Verificar en Base de Datos (debe pertenecer a la tienda correcta)
             const imageRecord = await store_images.findOne({
@@ -283,11 +364,26 @@ module.exports = {
             });
             const existsInDatabase = !!imageRecord;
 
+            // 🔒 1.1.b Sin registro en BD no se puede verificar la propiedad del asset de
+            //     Cloudinary, así que no se borra nada. (Antes se confiaba en el publicId del
+            //     cliente y se podía destruir un asset arbitrario, incluso de otra compañía.)
+            if (!imageRecord) {
+                await transaction.rollback();
+                return res.status(404).json({
+                    success: false,
+                    status: 404,
+                    message: 'La imagen que intenta eliminar NO EXISTE',
+                    store: null
+                });
+            }
+
+            // 🔒 Todas las operaciones en Cloudinary usan el public_id GUARDADO EN BD.
+            const dbPublicId = imageRecord.public_id;
 
             // 1.2 Verificar en Cloudinary
 
             try {
-                const cloudinaryInfo = await cloudinary.api.resource(publicId);
+                const cloudinaryInfo = await cloudinary.api.resource(dbPublicId);
                 if (cloudinaryInfo && cloudinaryInfo.public_id) {
                     cloudinaryExists = true;
 
@@ -337,7 +433,7 @@ module.exports = {
                 // Eliminar de Cloudinary
 
                 try {
-                    await cloudinary.uploader.destroy(publicId);
+                    await cloudinary.uploader.destroy(dbPublicId);
                     cloudinaryDeleted = true;
 
                 } catch (error) {
@@ -388,10 +484,12 @@ module.exports = {
                 }
             }
             // CASO 3: Existe solo en Cloudinary → Eliminar solo de Cloudinary
+            // (Inalcanzable desde el guard de arriba: sin registro en BD ya se devolvió 404.
+            //  Se conserva por defensa en profundidad.)
             else if (!existsInDatabase && cloudinaryExists) {
 
                 try {
-                    await cloudinary.uploader.destroy(publicId);
+                    await cloudinary.uploader.destroy(dbPublicId);
                     cloudinaryDeleted = true;
 
                 } catch (error) {
@@ -414,7 +512,6 @@ module.exports = {
                     'address',
                     'phone',
                     'neighborhood',
-                    'route_id',
                     'company_id', // ✅ Incluir company_id para consistencia
                     // 🗺️ Extraer coordenadas del campo PostGIS ubicacion
                     [stores.sequelize.fn('ST_Y', stores.sequelize.col('ubicacion')), 'latitude'],
@@ -423,8 +520,7 @@ module.exports = {
                     'closing_time',
                     'city',
                     'state',
-                    'country',
-                    'current_visit_status'
+                    'country'
                 ],
                 include: [
                     {
@@ -557,8 +653,11 @@ module.exports = {
                 });
             }
 
-            // 2. Verificar que la tienda existe
-            const store = await stores.findByPk(storeId);
+            // 2. Verificar que la tienda existe y pertenece a la compañía del usuario
+            // 🔒 (evita adjuntar imágenes a tiendas de otra compañía — IDOR multi-tenant)
+            const store = await stores.findOne({
+                where: { id: storeId, company_id: req.user?.companyId }
+            });
             if (!store) {
                 return res.status(404).json({
                     success: false,
@@ -705,10 +804,12 @@ module.exports = {
 
             //Permisos verificados: Usuario es owner de la empresa
 
-            // ✅ PASO 5: Eliminar logo anterior si existe
-            if (currentImagePublicId) {
+            // ✅ PASO 5: Eliminar logo anterior si existe.
+            // 🔒 Se usa el public_id guardado en BD, no el que envía el cliente.
+            const previousLogoPublicId = company.logo_public_id;
+            if (previousLogoPublicId) {
                 try {
-                    const deleteResult = await cloudinary.uploader.destroy(currentImagePublicId);
+                    const deleteResult = await cloudinary.uploader.destroy(previousLogoPublicId);
 
                     if (deleteResult.result === 'ok') {
 
@@ -821,10 +922,23 @@ module.exports = {
                 });
             }
 
-            // 3. Eliminar imagen anterior si existe (usando public_id desde BD)
-            if (currentImagePublicId) {
+            // 🔒 2.1 Solo su propia imagen o la de un miembro activo de su compañía
+            const authorizedUpload = await canManageUserImage(userId, req);
+            if (!authorizedUpload) {
+                return res.status(403).json({
+                    success: false,
+                    status: 403,
+                    message: 'No tiene permiso para modificar la imagen de este usuario'
+                });
+            }
+
+            // 3. Eliminar imagen anterior si existe.
+            // 🔒 Se usa SIEMPRE el public_id guardado en BD, no el que envía el cliente
+            //    (evita destruir un asset arbitrario de Cloudinary).
+            const previousPublicId = user.image_public_id;
+            if (previousPublicId) {
                 try {
-                    const deleteResult = await cloudinary.uploader.destroy(currentImagePublicId);
+                    const deleteResult = await cloudinary.uploader.destroy(previousPublicId);
 
                     if (deleteResult.result === 'ok') {
 

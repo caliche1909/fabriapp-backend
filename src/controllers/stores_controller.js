@@ -63,8 +63,7 @@ module.exports = {
                         message: "La ruta especificada no existe o no pertenece a esta compañía.",
                     });
                 }
-
-                store.route_id = route_id;
+                // El vínculo tienda↔ruta se crea en routes_stores (M2M) tras crear la tienda.
             }
 
             // 🔸 PASO 4.2: Convertir latitude/longitude a campo PostGIS ubicacion
@@ -123,10 +122,7 @@ module.exports = {
                         closing_time: store.closing_time || existingStore.closing_time,
                         city: store.city || existingStore.city,
                         state: store.state || existingStore.state,
-                        country: store.country || existingStore.country,
-                        route_id: store.route_id || existingStore.route_id,
-                        current_visit_status: 'pending',
-                        current_visit_id: null
+                        country: store.country || existingStore.country
                     }, { transaction });
 
                     // Restaurar (quita deleted_at y deleted_by)
@@ -221,6 +217,16 @@ module.exports = {
                 finalStore = newStore;
             }
 
+            // 🔸 PASO 8.1: Si la tienda pertenece a una ruta, crear el vínculo en
+            // routes_stores (modelo M2M). Idempotente por el UNIQUE (route_id, store_id).
+            if (route_id) {
+                await stores.sequelize.models.routes_stores.findOrCreate({
+                    where: { route_id: route_id, store_id: finalStore.id },
+                    defaults: { route_id: route_id, store_id: finalStore.id, company_id: company_id },
+                    transaction
+                });
+            }
+
             // 🔸 PASO 9: Consultar la tienda final (creada o restaurada) con todas sus relaciones
             const createdStore = await stores.findOne({
                 where: { id: finalStore.id },
@@ -230,7 +236,6 @@ module.exports = {
                     'address',
                     'phone',
                     'neighborhood',
-                    'route_id',
                     'company_id', // Incluir company_id en la respuesta
                     // 🗺️ Extraer coordenadas del campo PostGIS ubicacion
                     [stores.sequelize.fn('ST_Y', stores.sequelize.col('ubicacion')), 'latitude'],
@@ -239,8 +244,7 @@ module.exports = {
                     'closing_time',
                     'city',
                     'state',
-                    'country',
-                    'current_visit_status'
+                    'country'
                 ],
                 include: [
                     {
@@ -359,14 +363,16 @@ module.exports = {
     async updateStore(req, res) {
         const { id } = req.params;
         const { newStore, newUser } = req.body;
+        const companyId = req.user?.companyId; // 🔒 compañía activa del usuario autenticado
 
 
         // 🔄 Iniciar transacción para garantizar atomicidad
         const transaction = await stores.sequelize.transaction();
 
         try {
-            // Verificar si la tienda existe
-            const store = await stores.findByPk(id, { transaction });
+            // Verificar si la tienda existe y pertenece a la compañía del usuario (evita IDOR
+            // multi-tenant: checkPermission valida el permiso, no la pertenencia del recurso).
+            const store = await stores.findOne({ where: { id, company_id: companyId }, transaction });
             if (!store) {
                 await transaction.rollback();
                 return res.status(404).json({
@@ -383,7 +389,6 @@ module.exports = {
                 address,
                 phone,
                 neighborhood,
-                route_id,
                 latitude,
                 longitude,
                 opening_time,
@@ -439,7 +444,7 @@ module.exports = {
             // Actualizar los campos de la tienda (manteniendo los que no se envían)
             store.address = address || store.address;
             store.phone = phone || store.phone;
-            store.route_id = route_id !== undefined ? route_id : store.route_id;
+            // route_id ya NO vive en stores (M2M en routes_stores); se ignora aquí.
 
             // 🗺️ Actualizar ubicación PostGIS si llegan coordenadas
             if (latitude && longitude) {
@@ -578,7 +583,6 @@ module.exports = {
                     'address',
                     'phone',
                     'neighborhood',
-                    'route_id',
                     'company_id', // Incluir company_id en la respuesta
                     // 🗺️ Extraer coordenadas del campo PostGIS ubicacion
                     [stores.sequelize.fn('ST_Y', stores.sequelize.col('ubicacion')), 'latitude'],
@@ -587,8 +591,7 @@ module.exports = {
                     'closing_time',
                     'city',
                     'state',
-                    'country',
-                    'current_visit_status'
+                    'country'
                 ],
                 include: [
                     {
@@ -714,16 +717,49 @@ module.exports = {
                 });
             }
 
-            // 📊 Obtener todas las tiendas con TODAS las relaciones (igual que createStore/updateStore)
+            const companyId = req.user?.companyId;
+            const rid = parseInt(route_id, 10);
+
+            // Día hábil del negocio (TZ America/Bogota) para proyectar el estado de
+            // visita del DÍA (no el estado histórico persistido en la tienda).
+            const [{ hoy }] = await stores.sequelize.query(
+                `SELECT (now() AT TIME ZONE 'America/Bogota')::date AS hoy`,
+                { type: stores.sequelize.QueryTypes.SELECT }
+            );
+
+            // Visitas de HOY para esta ruta, SOLO las del usuario que consulta → mapa
+            // store_id -> visita más avanzada. Así las tarjetas reflejan el progreso de
+            // la lista propia y no la de otro usuario (aislamiento por user_id).
+            const todayVisits = await store_visits.findAll({
+                where: { route_id: rid, visit_day: hoy, user_id: req.user.id },
+                attributes: ['id', 'store_id', 'status'],
+                raw: true,
+            });
+            const visitRank = { pending: 1, visited: 2, completed: 3 };
+            const visitByStore = new Map();
+            for (const v of todayVisits) {
+                const cur = visitByStore.get(v.store_id);
+                if (!cur || (visitRank[v.status] || 0) > (visitRank[cur.status] || 0)) {
+                    visitByStore.set(v.store_id, v);
+                }
+            }
+
+            // 📊 Tiendas MIEMBRO de la ruta (vía routes_stores), aisladas por compañía.
+            // El estado de visita se PROYECTA desde la visita del día (store_visits);
+            // ya no existe columna heredada en stores.
             const allStores = await stores.findAll({
-                where: { route_id: route_id },
+                where: {
+                    company_id: companyId,
+                    [Op.and]: stores.sequelize.literal(
+                        `EXISTS (SELECT 1 FROM routes_stores rs WHERE rs.store_id = "stores"."id" AND rs.route_id = ${rid})`
+                    ),
+                },
                 attributes: [
                     'id',
                     'name',
                     'address',
                     'phone',
                     'neighborhood',
-                    'route_id',
                     'company_id',
                     // 🗺️ Extraer coordenadas del campo PostGIS ubicacion
                     [stores.sequelize.fn('ST_Y', stores.sequelize.col('ubicacion')), 'latitude'],
@@ -732,9 +768,7 @@ module.exports = {
                     'closing_time',
                     'city',
                     'state',
-                    'country',
-                    'current_visit_status',
-                    'current_visit_id' // 🆕 Incluir visit_id persistente
+                    'country'
                 ],
                 include: [
                     {
@@ -788,6 +822,14 @@ module.exports = {
                     storeData.images = [];
                 }
 
+                // 🔄 Proyectar el estado de visita del DÍA (si la ruta ya se inició).
+                // Sin visita de hoy ⇒ 'pending' (la ruta aún no se ha iniciado).
+                const dayVisit = visitByStore.get(storeData.id);
+                storeData.current_visit_status = dayVisit ? dayVisit.status : 'pending';
+                storeData.current_visit_id = dayVisit ? dayVisit.id : null;
+                // Contexto de ruta: el frontend usa route_id como la ruta abierta.
+                storeData.route_id = rid;
+
                 return storeData;
             });
 
@@ -837,23 +879,27 @@ module.exports = {
         try {
             // 📊 Obtener todas las tiendas huérfanas con TODAS las relaciones (igual que createStore/updateStore)
             const orphanStores = await stores.findAll({
-                where: { route_id: null, company_id: company_id },
+                where: {
+                    company_id: company_id,
+                    // Huérfana = SIN vínculos en routes_stores (ya no basta route_id NULL).
+                    [Op.and]: stores.sequelize.literal(
+                        `NOT EXISTS (SELECT 1 FROM routes_stores rs WHERE rs.store_id = "stores"."id")`
+                    ),
+                },
                 attributes: [
                     'id',
                     'name',
                     'address',
                     'phone',
                     'neighborhood',
-                    'route_id',
-                    'company_id', // ✅ Incluir company_id 
+                    'company_id', // ✅ Incluir company_id
                     // 🗺️ Extraer coordenadas del campo PostGIS ubicacion
                     [stores.sequelize.fn('ST_Y', stores.sequelize.col('ubicacion')), 'latitude'],
                     [stores.sequelize.fn('ST_X', stores.sequelize.col('ubicacion')), 'longitude'],
                     'opening_time',
                     'closing_time',
                     'city', 'state',
-                    'country',
-                    'current_visit_status'
+                    'country'
                 ],
                 include: [
                     {
@@ -940,7 +986,88 @@ module.exports = {
         }
     },
 
-    // 📌 Método para eliminar una tienda 
+    // 📌 Método para obtener TODAS las tiendas de la compañía (con o sin ruta).
+    // Usado por "Gestión de tiendas". Incluye las rutas a las que pertenece cada
+    // tienda (member_routes, M2M) para poder mostrarlas.
+    async getAllStores(req, res) {
+        const { company_id } = req.params;
+
+        if (!company_id) {
+            return res.status(400).json({
+                success: false,
+                status: 400,
+                message: "Ups! No se reconoce la compañía.",
+            });
+        }
+
+        try {
+            const allStores = await stores.findAll({
+                where: { company_id: company_id },
+                attributes: [
+                    'id', 'name', 'address', 'phone', 'neighborhood', 'company_id',
+                    [stores.sequelize.fn('ST_Y', stores.sequelize.col('ubicacion')), 'latitude'],
+                    [stores.sequelize.fn('ST_X', stores.sequelize.col('ubicacion')), 'longitude'],
+                    'opening_time', 'closing_time', 'city', 'state', 'country'
+                ],
+                include: [
+                    { association: 'store_type', as: 'store_type', attributes: ['id', 'name'] },
+                    { association: 'manager', as: 'manager', attributes: ['id', 'first_name', 'last_name', 'email', 'phone', 'status'] },
+                    { association: 'images', as: 'images', attributes: ['id', 'image_url', 'public_id', 'is_primary'] },
+                    // Rutas a las que pertenece la tienda (M2M).
+                    { association: 'member_routes', as: 'member_routes', attributes: ['id', 'name'], through: { attributes: [] } },
+                ],
+                order: [['name', 'ASC']],
+            });
+
+            const formattedStores = allStores.map(store => {
+                const storeData = store.toJSON();
+
+                if (storeData.manager) {
+                    let countryCode = undefined;
+                    let phoneNumber = undefined;
+                    if (storeData.manager.phone) {
+                        if (storeData.manager.phone.includes('-')) {
+                            [countryCode, phoneNumber] = storeData.manager.phone.split('-');
+                        } else {
+                            phoneNumber = storeData.manager.phone;
+                        }
+                    }
+                    storeData.manager = {
+                        id: storeData.manager.id,
+                        name: storeData.manager.first_name,
+                        lastName: storeData.manager.last_name,
+                        email: storeData.manager.email,
+                        countryCode: countryCode,
+                        phone: phoneNumber,
+                        status: storeData.manager.status
+                    };
+                }
+
+                if (!storeData.images) {
+                    storeData.images = [];
+                }
+
+                return storeData;
+            });
+
+            return res.status(200).json({
+                success: true,
+                status: 200,
+                message: `Se encontraron ${formattedStores.length} tiendas`,
+                stores: formattedStores
+            });
+
+        } catch (error) {
+            console.error("❌ Error al obtener todas las tiendas:", error);
+            return res.status(500).json({
+                success: false,
+                status: 500,
+                message: "Error interno del servidor al obtener las tiendas.",
+            });
+        }
+    },
+
+    // 📌 Método para eliminar una tienda
     async deleteStore(req, res) {
         // 🔄 Usar transacción para garantizar atomicidad entre deleted_by y destroy
         const transaction = await stores.sequelize.transaction();
@@ -948,9 +1075,11 @@ module.exports = {
         try {
             const { id } = req.params;
             const user_id = req.user?.id; // Usuario que hace la eliminación
+            const companyId = req.user?.companyId; // 🔒 compañía activa del usuario autenticado
 
-            // Verificar si la tienda existe (paranoid: true excluye ya eliminadas automáticamente)
-            const store = await stores.findByPk(id, { transaction });
+            // Verificar si la tienda existe y pertenece a la compañía del usuario (evita IDOR
+            // multi-tenant). paranoid: true excluye ya eliminadas automáticamente.
+            const store = await stores.findOne({ where: { id, company_id: companyId }, transaction });
             if (!store) {
                 await transaction.rollback();
                 return res.status(404).json({
@@ -960,8 +1089,17 @@ module.exports = {
                 });
             }
 
-            //verificar que la tienda no tenga visitas asociadas
-            if (store.current_visit_status === 'visited' || store.current_visit_id !== null) {
+            // Verificar que la tienda no tenga una visita EN CURSO hoy (visitada/vendida).
+            // El estado de visita vive ahora en store_visits (no en la tienda).
+            const [{ hoy }] = await stores.sequelize.query(
+                `SELECT (now() AT TIME ZONE 'America/Bogota')::date AS hoy`,
+                { type: stores.sequelize.QueryTypes.SELECT, transaction }
+            );
+            const visitaEnCurso = await store_visits.findOne({
+                where: { store_id: store.id, visit_day: hoy, status: ['visited', 'completed'] },
+                transaction
+            });
+            if (visitaEnCurso) {
                 await transaction.rollback();
                 return res.status(400).json({
                     success: false,
@@ -1002,10 +1140,11 @@ module.exports = {
 
         const { storeId } = req.params;
         const { route_id } = req.body;
+        const companyId = req.user?.companyId; // 🔒 compañía activa del usuario autenticado
 
         try {
-            // Verificar si la tienda existe
-            const store = await stores.findByPk(storeId);
+            // Verificar que la tienda exista y sea de la compañía del usuario (evita IDOR multi-tenant)
+            const store = await stores.findOne({ where: { id: storeId, company_id: companyId } });
             if (!store) {
                 return res.status(404).json({
                     success: false,
@@ -1014,9 +1153,26 @@ module.exports = {
                 });
             }
 
-            // Asignar la tienda a la ruta
-            store.route_id = route_id;
-            await store.save();
+            // El vínculo tienda↔ruta vive en routes_stores (M2M). Idempotente por el UNIQUE.
+            if (route_id) {
+                // 🔒 Validar que la ruta también pertenezca a la compañía del usuario (evita
+                // mezclar una tienda con una ruta de otra compañía en routes_stores).
+                const route = await stores.sequelize.models.routes.findOne({
+                    where: { id: route_id, company_id: companyId }
+                });
+                if (!route) {
+                    return res.status(404).json({
+                        success: false,
+                        status: 404,
+                        message: "La ruta indicada no existe en su compañía."
+                    });
+                }
+
+                await stores.sequelize.models.routes_stores.findOrCreate({
+                    where: { route_id: route_id, store_id: store.id },
+                    defaults: { route_id: route_id, store_id: store.id, company_id: companyId }
+                });
+            }
 
             const createdStore = await stores.findOne({
                 where: { id: storeId },
@@ -1026,7 +1182,6 @@ module.exports = {
                     'address',
                     'phone',
                     'neighborhood',
-                    'route_id',
                     'company_id', // ✅ Incluir company_id en la respuesta
                     // 🗺️ Extraer coordenadas del campo PostGIS ubicacion
                     [stores.sequelize.fn('ST_Y', stores.sequelize.col('ubicacion')), 'latitude'],
@@ -1035,8 +1190,7 @@ module.exports = {
                     'closing_time',
                     'city',
                     'state',
-                    'country',
-                    'current_visit_status'
+                    'country'
                 ],
                 include: [
                     {
@@ -1105,6 +1259,40 @@ module.exports = {
         }
     },
 
+    // 📌 Método para DESVINCULAR una tienda de UNA ruta (M2M). No borra la tienda,
+    // solo elimina su vínculo en routes_stores con esa ruta.
+    async removeStoreFromRoute(req, res) {
+        try {
+            const { storeId, routeId } = req.params;
+            const companyId = req.user?.companyId;
+            const sid = parseInt(storeId);
+            const rid = parseInt(routeId);
+
+            if (isNaN(sid) || isNaN(rid)) {
+                return res.status(400).json({ success: false, status: 400, message: 'Identificadores inválidos.' });
+            }
+
+            const store = await stores.findByPk(sid);
+            if (!store) {
+                return res.status(404).json({ success: false, status: 404, message: 'La tienda ya no existe.' });
+            }
+
+            // Eliminar el vínculo M2M (aislado por compañía).
+            const deleted = await stores.sequelize.models.routes_stores.destroy({
+                where: { store_id: sid, route_id: rid, company_id: companyId }
+            });
+
+            return res.status(200).json({
+                success: true,
+                status: 200,
+                message: deleted > 0 ? 'Tienda desvinculada de la ruta.' : 'La tienda no estaba vinculada a esa ruta.'
+            });
+        } catch (error) {
+            console.error("❌ Error al desvincular tienda de ruta:", error);
+            return res.status(500).json({ success: false, status: 500, message: 'Error interno al desvincular la tienda.' });
+        }
+    },
+
     // 📌 Método para actualizar una tienda como visitada
     async updateStoreAsVisited(req, res) {
         let transaction = null;
@@ -1141,12 +1329,8 @@ module.exports = {
                 });
             }
 
-            // 🔍 Buscar tienda con datos completos (una sola consulta optimizada)
-            const store = await stores.findByPk(parseInt(store_id), {
-                include: [
-                    { model: stores.sequelize.models.routes, as: 'route', attributes: ['name'] }
-                ]
-            });
+            // 🔍 Buscar la tienda.
+            const store = await stores.findByPk(parseInt(store_id));
 
             if (!store) {
                 return res.status(404).json({
@@ -1156,32 +1340,39 @@ module.exports = {
                 });
             }
 
-            // 🚫 Validar visita duplicada HOY (UTC correcto con Date.UTC explícito)
-            const startOfTodayUTC = new Date(Date.UTC(
-                new Date().getUTCFullYear(),
-                new Date().getUTCMonth(),
-                new Date().getUTCDate(),
-                0, 0, 0, 0
-            ));
+            // Ruta en cuyo contexto se marca la visita: la envía el frontend en el body.
+            const bodyRouteId = req.body.route_id ? parseInt(req.body.route_id) : null;
 
-            const endOfTodayUTC = new Date(Date.UTC(
-                new Date().getUTCFullYear(),
-                new Date().getUTCMonth(),
-                new Date().getUTCDate(),
-                23, 59, 59, 999
-            ));
+            // Día hábil del negocio (TZ America/Bogota).
+            const [{ hoy }] = await stores.sequelize.query(
+                `SELECT (now() AT TIME ZONE 'America/Bogota')::date AS hoy`,
+                { type: stores.sequelize.QueryTypes.SELECT }
+            );
 
-            const existingVisitToday = await store_visits.findOne({
-                where: {
-                    store_id: parseInt(store_id),
-                    user_id: user_id,
-                    date: {
-                        [Op.between]: [startOfTodayUTC, endOfTodayUTC]
-                    }
-                }
-            });
+            transaction = await stores.sequelize.transaction();
 
-            if (existingVisitToday) {
+            // Buscar la parada del DÍA (visita) de esta tienda en la ruta para HOY.
+            // Acotado SIEMPRE a las visitas del propio usuario (incluido el owner):
+            // cada quien solo marca la lista que él mismo inició. Nadie puede actuar
+            // sobre la ruta de otro.
+            // ⚠️ NO se crean visitas ad-hoc: si la tienda no tiene una parada de hoy, se rechaza
+            //    (la ruta debe iniciarse primero para generar las paradas 'pending').
+            const visitWhere = { store_id: store.id, visit_day: hoy, user_id };
+            if (bodyRouteId) visitWhere.route_id = bodyRouteId;
+
+            const visitRecord = await store_visits.findOne({ where: visitWhere, transaction });
+
+            if (!visitRecord) {
+                await transaction.rollback();
+                return res.status(409).json({
+                    success: false,
+                    status: 409,
+                    message: 'Esta tienda no tiene visitas pendientes para el día de hoy. Primero debes iniciar la ruta.',
+                });
+            }
+
+            if (visitRecord.status === 'visited' || visitRecord.status === 'completed') {
+                await transaction.rollback();
                 return res.status(409).json({
                     success: false,
                     status: 409,
@@ -1189,33 +1380,11 @@ module.exports = {
                 });
             }
 
-            // Iniciar transacción
-            transaction = await stores.sequelize.transaction();
-
-            // 🔍 Obtener datos del usuario para desnormalización
-            const currentUser = await users.findByPk(user_id, {
-                attributes: ['first_name', 'last_name'],
-                transaction
-            });
-
-            // ✅ CORRECTO: No envías 'date' - la BD usa DEFAULT CURRENT_TIMESTAMP
-            // Usar directamente 'store' que ya tiene todos los datos necesarios
-            const visitRecord = await store_visits.create({
-                user_id,
-                store_id: store.id,
-                route_id: store.route_id,
-                distance: parsedDistance,
-                user_name: currentUser ? `${currentUser.first_name} ${currentUser.last_name}`.trim() : null,
-                store_name: store.name, // ✅ Usar store directamente
-                store_address: store.address, // ✅ Usar store directamente
-                route_name: store.route ? store.route.name : null, // ✅ Usar store.route
-                sale_amount: 0.00
-            }, { transaction });
-
-            // 🆕 Actualizar estado Y visit_id de la tienda (solución definitiva)
-            store.current_visit_status = 'visited';
-            store.current_visit_id = visitRecord.id;
-            await store.save({ transaction });
+            // Avanzar la parada planificada 'pending' → 'visited'.
+            visitRecord.status = 'visited';
+            visitRecord.distance = parsedDistance;
+            visitRecord.arrived_at = new Date();
+            await visitRecord.save({ transaction });
 
             await transaction.commit();
 
@@ -1237,51 +1406,6 @@ module.exports = {
             res.status(500).json({
                 success: false,
                 message: 'Error interno del servidor al registrar visita',
-                error: process.env.NODE_ENV === 'development' ? error.message : undefined
-            });
-        }
-    },
-
-    // 📌 Método para resetear todas las tiendas de una ruta a 'pending'
-    async resetRouteVisits(req, res) {
-        try {
-            const { route_id } = req.params;
-
-            if (!route_id || isNaN(parseInt(route_id))) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'ID de ruta inválido'
-                });
-            }
-
-            // 🔄 Actualizar todas las tiendas de la ruta a 'pending' y limpiar visit_id
-            const [updatedRows] = await stores.update(
-                {
-                    current_visit_status: 'pending',
-                    current_visit_id: null // 🆕 Limpiar visit_id para permitir nuevas visitas
-                },
-                {
-                    where: { route_id: parseInt(route_id) },
-                    returning: false
-                }
-            );
-
-
-
-            res.status(200).json({
-                success: true,
-                message: `Se resetearon ${updatedRows} tiendas de la ruta ${route_id} a estado 'pending'`,
-                data: {
-                    route_id: parseInt(route_id),
-                    stores_reset: updatedRows
-                }
-            });
-
-        } catch (error) {
-            console.error('❌ Error al resetear visitas de ruta:', error);
-            res.status(500).json({
-                success: false,
-                message: 'Error interno del servidor al resetear las visitas',
                 error: process.env.NODE_ENV === 'development' ? error.message : undefined
             });
         }

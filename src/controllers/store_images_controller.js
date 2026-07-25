@@ -31,12 +31,10 @@ module.exports = {
                     'address',
                     'phone',
                     'neighborhood',
-                    'route_id',
                     'company_id', // ✅ Incluir company_id para consistencia
                     // 🗺️ Extraer coordenadas del campo PostGIS ubicacion (igual que otros controladores)
                     [stores.sequelize.fn('ST_Y', stores.sequelize.col('ubicacion')), 'latitude'],
                     [stores.sequelize.fn('ST_X', stores.sequelize.col('ubicacion')), 'longitude'],
-                    'current_visit_status',
                     'opening_time',
                     'closing_time',
                     'city',

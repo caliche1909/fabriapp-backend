@@ -56,12 +56,11 @@ module.exports = function (sequelize, DataTypes) {
       }
     },
     distance: {
+      // Nullable: una parada 'pending' aún no tiene distancia medida; se registra
+      // al marcarse 'visited'. (Cambiado por la migración 20260715180414.)
       type: DataTypes.DECIMAL(10, 2),
-      allowNull: false,
+      allowNull: true,
       validate: {
-        notNull: {
-          msg: "La distancia es requerida"
-        },
         isDecimal: {
           msg: "La distancia debe ser un número decimal"
         },
@@ -102,6 +101,34 @@ module.exports = function (sequelize, DataTypes) {
         }
       },
       comment: "Valor de la venta realizada en esta visita (0 = solo visita sin venta)"
+    },
+    // 🔄 Ciclo de vida de la parada (agregado por la migración 20260715180414).
+    status: {
+      type: DataTypes.STRING(20),
+      allowNull: false,
+      defaultValue: 'pending',
+      validate: {
+        isIn: {
+          args: [['pending', 'visited', 'completed']],
+          msg: "El estado debe ser 'pending', 'visited' o 'completed'"
+        }
+      },
+      comment: "Ciclo de vida de la parada: 'pending' | 'visited' | 'completed'"
+    },
+    visit_day: {
+      type: DataTypes.DATEONLY,
+      allowNull: true,
+      comment: 'Día hábil del negocio (TZ America/Bogota) al que pertenece la parada'
+    },
+    arrived_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      comment: "Momento en que la parada pasó a 'visited' (llegada real)"
+    },
+    optimized_seq: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      comment: 'Orden del recorrido optimizado del día (solo pendientes; NULL = sin orden)'
     }
   }, {
     sequelize,

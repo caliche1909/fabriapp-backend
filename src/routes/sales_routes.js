@@ -54,12 +54,12 @@ const reportsLimiter = createQueryLimiter();
  * @route   GET /api/sales/reports/summary
  * @desc    KPIs generales + top vendedores/tiendas (Dashboard)
  * @query   from?=YYYY-MM-DD, to?=YYYY-MM-DD
- * @access  Privado — permiso 'view_reports'
+ * @access  Privado — permiso 'view_sales_dashboard'
  */
 router.get('/reports/summary',
     verifyToken,
     reportsLimiter,
-    checkPermission('view_reports'),
+    checkPermission('view_sales_dashboard'),
     salesReportsController.getSummary
 );
 
@@ -80,24 +80,37 @@ router.get('/reports/analytics',
  * @route   GET /api/sales/reports/no-sale
  * @desc    Reportes de no-venta agregados por categoría y razón
  * @query   from?, to?
- * @access  Privado — permiso 'view_reports'
+ * @access  Privado — permiso 'view_no_sale_reports'
  */
 router.get('/reports/no-sale',
     verifyToken,
     reportsLimiter,
-    checkPermission('view_reports'),
+    checkPermission('view_no_sale_reports'),
     salesReportsController.getNoSaleReport
 );
 
 /**
+ * @route   GET /api/sales/reports/no-sale/detail
+ * @desc    Lista paginada de reportes de no-venta INDIVIDUALES (detalle/drill-down)
+ * @query   from?, to?, page?, limit?, categoryId?, reasonId?, sellerId?, storeId?
+ * @access  Privado — permiso 'view_no_sale_reports'
+ */
+router.get('/reports/no-sale/detail',
+    verifyToken,
+    reportsLimiter,
+    checkPermission('view_no_sale_reports'),
+    salesReportsController.getNoSaleReportDetail
+);
+
+/**
  * @route   GET /api/sales/reports/sellers
- * @desc    Lista de vendedores (miembros activos) para los selectores
- * @access  Privado — permiso 'view_reports'
+ * @desc    Lista de vendedores (miembros activos) para el selector del Cuadre
+ * @access  Privado — permiso 'view_sales_reconciliation'
  */
 router.get('/reports/sellers',
     verifyToken,
     reportsLimiter,
-    checkPermission('view_reports'),
+    checkPermission('view_sales_reconciliation'),
     salesReportsController.getSellers
 );
 
@@ -106,12 +119,12 @@ router.get('/reports/sellers',
  * @desc    Cuadre de ventas: visitas del período (con/sin venta), resumen por
  *          vendedor y montos a cobrar por método de pago. Por defecto HOY.
  * @query   from?, to?, user_id?
- * @access  Privado — permiso 'view_reports'
+ * @access  Privado — permiso 'view_sales_reconciliation'
  */
 router.get('/reports/cuadre',
     verifyToken,
     reportsLimiter,
-    checkPermission('view_reports'),
+    checkPermission('view_sales_reconciliation'),
     salesReportsController.getCuadre
 );
 

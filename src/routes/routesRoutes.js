@@ -55,5 +55,31 @@ router.delete('/delete/:id',
     routesController.deleteRoute
 );
 
+// 🚀 Iniciar ruta: crea las visitas del día en 'pending' a nombre del usuario que
+// las resolverá. La autorización fina se valida en el controlador (no como middleware,
+// porque un vendedor puede iniciar SU propia ruta sin permiso especial):
+//   - Iniciar para otro usuario → owner o permiso 'start_route_for_others'.
+//   - Iniciar la propia → ser el vendedor asignado y estar en día hábil.
+router.post('/:route_id/start',
+    verifyToken,
+    updateRouteLimiter,
+    routesController.startRoute
+);
+
+// 📋 Visitas del día de una ruta (drawer de "Iniciar ruta").
+router.get('/:route_id/visits/today',
+    verifyToken,
+    listRoutesByCompanyLimiter,
+    routesController.getRouteDayVisits
+);
+
+// 🧭 Recorrido óptimo del día (vecino más cercano + 2-opt, línea recta) desde el GPS.
+// Solo ordena/clasifica las visitas pendientes; no modifica datos.
+router.get('/:route_id/optimize',
+    verifyToken,
+    listRoutesByCompanyLimiter,
+    routesController.optimizeRoute
+);
+
 module.exports = router;
 

@@ -41,11 +41,12 @@ router.get('/getStoresByRoute/:route_id',
     storesController.getStoresbyRoute
 );
 
-router.get('/orphans/:company_id',
+// 📌 Todas las tiendas de la compañía (con o sin ruta) — para "Gestión de tiendas".
+router.get('/company/:company_id',
     verifyToken,
     createQueryLimiter(),
-    checkPermission('view_stores'), // permiso para ver las tiendas huérfanas
-    storesController.getOrphanStores
+    checkPermission('view_stores'),
+    storesController.getAllStores
 );
 
 router.delete('/delete/:id',
@@ -62,19 +63,19 @@ router.put('/assignStoreToRoute/:storeId',
     storesController.assignStoreToRoute
 );
 
+// 📌 Desvincular una tienda de UNA ruta (M2M): elimina el vínculo en routes_stores.
+router.delete('/:storeId/routes/:routeId',
+    verifyToken,
+    createGeneralLimiter(),
+    checkAnyPermission(['store_to_route', 'change_store_route']),
+    storesController.removeStoreFromRoute
+);
+
 // 📌 Ruta para actualizar el estado de visita de una tienda
 router.put('/update-store-as-visited/:store_id',
     verifyToken,
     createGeneralLimiter(),
     storesController.updateStoreAsVisited
-);
-
-// 📌 Ruta para resetear todas las tiendas de una ruta a 'pending'
-router.put('/routes/:route_id/reset-visits',
-    verifyToken,
-    checkPermission('reset_route'),
-    createGeneralLimiter(),
-    storesController.resetRouteVisits
 );
 
 module.exports = router;

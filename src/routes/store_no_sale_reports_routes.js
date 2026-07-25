@@ -5,8 +5,7 @@ const { verifyToken } = require('../middlewares/jwt.middleware');
 
 // 🛡️ IMPORTAR RATE LIMITING
 const {
-    createGeneralLimiter,
-    createQueryLimiter
+    createGeneralLimiter
 } = require('../middlewares/smartRateLimit.middleware');
 
 // 📌 RUTAS PARA REPORTES DE NO-VENTA
@@ -19,53 +18,15 @@ const createReportLimiter = createGeneralLimiter({
     message: "Límite de creación de reportes de no-venta alcanzado"
 });
 
-// POST /api/store-no-sale-reports - Crear un nuevo reporte de no-venta
-router.post('/', 
+// POST /api/store_no_sale_reports - Crear un nuevo reporte de no-venta (usado por el
+// vendedor desde DialogNoSaleReport). Es el ÚNICO endpoint de este dominio que consume
+// el frontend. La consulta/detalle de reportes vive en el módulo de sales
+// (GET /api/sales/reports/no-sale y .../no-sale/detail), scopeado por compañía y con
+// checkPermission('view_reports').
+router.post('/',
     verifyToken,
     createReportLimiter,
     StoreNoSaleReportsController.createNoSaleReport
-);
-
-// GET /api/store-no-sale-reports/company/:companyId - Obtener reportes por compañía
-router.get('/company/:companyId', 
-    verifyToken,
-    createQueryLimiter(),
-    StoreNoSaleReportsController.getReportsByCompany
-);
-
-// GET /api/store-no-sale-reports/user/:userId - Obtener reportes por usuario
-router.get('/user/:userId', 
-    verifyToken,
-    createQueryLimiter(),
-    StoreNoSaleReportsController.getReportsByUser
-);
-
-// GET /api/store-no-sale-reports/stats/company/:companyId - Obtener estadísticas por compañía
-router.get('/stats/company/:companyId', 
-    verifyToken,
-    createQueryLimiter(),
-    StoreNoSaleReportsController.getStatsByCategory
-);
-
-// GET /api/store-no-sale-reports/:reportId - Obtener un reporte específico
-router.get('/:reportId', 
-    verifyToken,
-    createQueryLimiter(),
-    StoreNoSaleReportsController.getReportById
-);
-
-// PUT /api/store-no-sale-reports/:reportId - Actualizar un reporte
-router.put('/:reportId', 
-    verifyToken,
-    createGeneralLimiter(),
-    StoreNoSaleReportsController.updateReport
-);
-
-// DELETE /api/store-no-sale-reports/:reportId - Eliminar un reporte
-router.delete('/:reportId', 
-    verifyToken,
-    createGeneralLimiter(),
-    StoreNoSaleReportsController.deleteReport
 );
 
 module.exports = router;

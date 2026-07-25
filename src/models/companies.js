@@ -144,6 +144,12 @@ module.exports = function (sequelize, DataTypes) {
             type: DataTypes.GEOMETRY('POINT', 4326),
             allowNull: true
         },
+        timezone: {
+            type: DataTypes.STRING(64),
+            allowNull: false,
+            defaultValue: 'America/Bogota',
+            comment: 'Zona horaria IANA de la compañía (ej. America/Bogota). Usada para reportes y día hábil.'
+        },
         is_active: {
             type: DataTypes.BOOLEAN,
             allowNull: false,

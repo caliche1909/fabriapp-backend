@@ -49,14 +49,6 @@ module.exports = function (sequelize, DataTypes) {
         }
       }
     },
-    route_id: {
-      type: DataTypes.INTEGER,
-      allowNull: true,
-      references: {
-        model: 'routes',
-        key: 'id'
-      }
-    },
     manager_id: {
       type: DataTypes.UUID,
       allowNull: true,
@@ -105,27 +97,6 @@ module.exports = function (sequelize, DataTypes) {
     neighborhood: {
       type: DataTypes.STRING(100),
       allowNull: true
-    },
-    current_visit_status: {
-      type: DataTypes.STRING(20),
-      allowNull: false,
-      defaultValue: 'pending',
-      validate: {
-        isIn: {
-          args: [['pending', 'visited', 'completed']],
-          msg: "El estado de visita debe ser 'pending', 'visited' o 'completed'"
-        }
-      },
-      comment: 'Estado de la visita actual: pending (pendiente), visited (visitada), completed (completada con venta)'
-    },
-    current_visit_id: {
-      type: DataTypes.INTEGER,
-      allowNull: true,
-      references: {
-        model: 'store_visits',
-        key: 'id'
-      },
-      comment: 'ID de la visita actual (si está visitada)'
     },
     deleted_at: {
       type: DataTypes.DATE,
@@ -185,12 +156,6 @@ module.exports = function (sequelize, DataTypes) {
         ]
       },
       {
-        name: "idx_stores_route_id",
-        fields: [
-          { name: "route_id" }
-        ]
-      },
-      {
         name: "idx_stores_manager_id",
         fields: [
           { name: "manager_id" }
@@ -209,13 +174,6 @@ module.exports = function (sequelize, DataTypes) {
         ]
       },
       {
-        name: "idx_stores_company_route",
-        fields: [
-          { name: "company_id" },
-          { name: "route_id" }
-        ]
-      },
-      {
         name: "idx_stores_ubicacion",
         using: 'GIST',
         fields: [
@@ -228,19 +186,6 @@ module.exports = function (sequelize, DataTypes) {
         fields: [
           { name: "company_id" },
           { name: "address" }
-        ]
-      },
-      {
-        name: "idx_stores_route_visit_status",
-        fields: [
-          { name: "route_id" },
-          { name: "current_visit_status" }
-        ]
-      },
-      {
-        name: "idx_stores_visit_status",
-        fields: [
-          { name: "current_visit_status" }
         ]
       }
     ]
@@ -294,33 +239,23 @@ module.exports = function (sequelize, DataTypes) {
     });
   };
 
-  // Método para resetear todas las tiendas de una ruta a 'pending'
-  Stores.resetRouteVisits = async function (routeId) {
-    try {
-      const result = await sequelize.query(
-        'SELECT reset_route_visits($1) as result',
-        {
-          bind: [routeId],
-          type: sequelize.QueryTypes.SELECT,
-          raw: true
-        }
-      );
-      return result[0].result;
-    } catch (error) {
-      console.error('Error al resetear visitas de ruta:', error);
-      throw error;
-    }
-  };
-
   Stores.associate = (models) => {
     Stores.belongsTo(models.companies, {
       foreignKey: 'company_id',
       as: 'company'
     });
 
-    Stores.belongsTo(models.routes, {
-      foreignKey: 'route_id',
-      as: 'route'
+    // 🔗 Relación MUCHOS-A-MUCHOS con rutas vía routes_stores (única fuente de la
+    // relación tienda↔ruta; la antigua 1→1 `route`/`route_id` se eliminó en Fase 7).
+    Stores.hasMany(models.routes_stores, {
+      foreignKey: 'store_id',
+      as: 'store_routes'
+    });
+    Stores.belongsToMany(models.routes, {
+      through: models.routes_stores,
+      foreignKey: 'store_id',
+      otherKey: 'route_id',
+      as: 'member_routes'
     });
 
     Stores.belongsTo(models.store_types, {
@@ -337,12 +272,6 @@ module.exports = function (sequelize, DataTypes) {
     Stores.belongsTo(models.users, {
       foreignKey: 'deleted_by',
       as: 'deleted_by_user'
-    });
-
-    // 🔗 Relación con la visita actual (campo current_visit_id)
-    Stores.belongsTo(models.store_visits, {
-      foreignKey: 'current_visit_id',
-      as: 'current_visit'
     });
 
     // 🔗 Relación inversa: una tienda puede tener muchas visitas históricas
