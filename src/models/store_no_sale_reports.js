@@ -250,13 +250,12 @@ module.exports = function(sequelize, DataTypes) {
           { name: "created_at", order: "DESC" }
         ]
       },
-      {
-        name: "idx_store_no_sale_reports_visit",
-        fields: [{ name: "visit_id" }],
-        where: {
-          visit_id: { [sequelize.Sequelize.Op.ne]: null }
-        }
-      },
+      // ⚠️ Aquí había un segundo índice, `idx_store_no_sale_reports_visit`, con la
+      // MISMA definición que el de abajo pero sin `unique`. Era redundante (una
+      // escritura extra por cada reporte sin aportar nada) y se eliminó en la
+      // migración `20260814120000-drop-duplicate-no-sale-visit-index`.
+      // El único de abajo cubre las búsquedas por visita Y garantiza la regla
+      // "un solo reporte de no-venta por visita". No lo dupliques otra vez.
       {
         name: "idx_unique_visit_report",
         unique: true,

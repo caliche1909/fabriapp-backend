@@ -11,6 +11,7 @@ const image_uploadController = require('./image_upload_controller');
 const store_imagesController = require('./store_images_controller');
 const register_company_and_userController = require('./register_company_and_user_controller');
 const companyController = require('./company_controller');
+const companySettingsController = require('./company_settings_controller');
 const rolesController = require('./roles_controller');
 const authController = require('./auth_controller');
 const geocodingController = require('./geocoding_controller');
@@ -18,6 +19,12 @@ const no_saleCategories = require('./no_sale_categories_controller');
 const payment_methodsController = require('./payment_methods_controller');
 const salesController = require('./sales_controller');
 const salesReportsController = require('./sales_reports_controller');
+const productsController = require('./products_controller');
+const productCategoriesController = require('./product_categories_controller');
+const productPresentationsController = require('./product_presentations_controller');
+const productStockController = require('./product_stock_controller');
+const warehousesController = require('./warehouses_controller');
+const stockTransfersController = require('./stock_transfers_controller');
 
 module.exports = {
     userController,
@@ -33,11 +40,18 @@ module.exports = {
     store_imagesController,
     register_company_and_userController,
     companyController,
+    companySettingsController,
     rolesController,
     authController,
     geocodingController,
     no_saleCategories,
     payment_methodsController,
     salesController,
-    salesReportsController
+    salesReportsController,
+    productsController,
+    productCategoriesController,
+    productPresentationsController,
+    productStockController,
+    warehousesController,
+    stockTransfersController
 };

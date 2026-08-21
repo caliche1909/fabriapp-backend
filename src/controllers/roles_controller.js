@@ -10,7 +10,8 @@ const { sequelize } = require('../models');
  */
 const getRolesForUserCreation = async (req, res) => {
     try {
-        const { companyId } = req.params;
+        // 🔒 Compañía SIEMPRE desde la sesión (no del path) → cierra IDOR multi-tenant.
+        const companyId = req.user.companyId;
 
         // Verificar que la empresa existe
         const company = await companies.findByPk(companyId);
@@ -79,7 +80,8 @@ const getRolesForUserCreation = async (req, res) => {
  */
 const getRolesByCompany = async (req, res) => {
     try {
-        const { companyId } = req.params;
+        // 🔒 Compañía SIEMPRE desde la sesión (no del path) → cierra IDOR multi-tenant.
+        const companyId = req.user.companyId;
 
         // Verificar que la empresa existe
         const company = await companies.findByPk(companyId);
@@ -141,7 +143,8 @@ const getRolesByCompany = async (req, res) => {
 const getRolePermissions = async (req, res) => {
     try {
         const { roleId } = req.params;
-        const { companyId } = req.query;
+        // 🔒 Compañía SIEMPRE desde la sesión (no del query) → cierra IDOR multi-tenant.
+        const companyId = req.user.companyId;
 
 
         // Verificar que el rol existe
@@ -193,7 +196,8 @@ const updateCompanyRole = async (req, res) => {
     try {
         const { roleId } = req.params;
         const { roleName, roleDescription, permissions: rolePermissions } = req.body;
-        const { companyId } = req.query;
+        // 🔒 Compañía SIEMPRE desde la sesión (no del query) → cierra IDOR multi-tenant.
+        const companyId = req.user.companyId;
 
 
         // 1. Validar que todos los datos requeridos estén presentes
@@ -360,7 +364,8 @@ const updateCompanyRole = async (req, res) => {
 const deleteCompanyRole = async (req, res) => {
     try {
         const { roleId } = req.params;
-        const { companyId } = req.query;
+        // 🔒 Compañía SIEMPRE desde la sesión (no del query) → cierra IDOR multi-tenant.
+        const companyId = req.user.companyId;
 
         // 1. Validar que todos los datos requeridos estén presentes
         if (!roleId || !companyId) {
@@ -492,7 +497,8 @@ const deleteCompanyRole = async (req, res) => {
 const createCompanyRole = async (req, res) => {
 
     try {
-        const { companyId } = req.params;
+        // 🔒 Compañía SIEMPRE desde la sesión (no del path) → cierra IDOR multi-tenant.
+        const companyId = req.user.companyId;
         const { roleName, roleDescription, permissions } = req.body;
 
         // PASO A PASO PARA CREAR ROL Y ASIGNAR PERMISOS:
@@ -657,60 +663,8 @@ const createCompanyRole = async (req, res) => {
 
 
 
-/********************************************FUNSIONES SIN USO ACTUALMENTE **************************************************/
-
-/**
- * Obtener todos los roles globales del sistema
- */
-const getGlobalRoles = async (req, res) => {
-    try {
-        console.log('👤 [RolesController] Obteniendo roles globales');
-
-        const globalRoles = await roles.findAll({
-            where: {
-                is_global: true
-            },
-            order: [['name', 'ASC']]
-        });
-
-        console.log('👤 [RolesController] Roles globales encontrados:', globalRoles.length);
-
-        // Formatear roles para satisfacer la interfaz del frontend
-        const formattedRoles = globalRoles.map(role => ({
-            id: role.id,
-            name: role.name,
-            label: role.label,
-            description: role.description,
-            isGlobal: role.is_global,
-            companyId: role.company_id
-        }));
-
-        res.status(200).json({
-            success: true,
-            status: 200,
-            message: 'Roles globales obtenidos exitosamente',
-            roles: formattedRoles
-        });
-
-    } catch (error) {
-        console.error('❌ [RolesController] Error al obtener roles globales:', error);
-        res.status(500).json({
-            success: false,
-            status: 500,
-            message: 'Error interno del servidor',
-            roles: []
-        });
-    }
-};
-
-
-
-
-
-
 module.exports = {
     getRolesByCompany,
-    getGlobalRoles,
     getRolesForUserCreation,
     createCompanyRole,
     getRolePermissions,

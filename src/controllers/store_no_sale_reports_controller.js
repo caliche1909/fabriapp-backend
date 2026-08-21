@@ -1,4 +1,5 @@
 const { store_no_sale_reports, stores, store_visits, sales } = require('../models');
+const { autorizarSobreLaVisita } = require('../utils/storeVisits');
 const { ValidationError, ForeignKeyConstraintError } = require('sequelize');
 
 
@@ -60,6 +61,18 @@ const StoreNoSaleReportsController = {
                     status: 400,
                     message: 'Esta tienda no tiene una visita registrada'
                 });
+            }
+
+            // 🔐 Solo el ENCARGADO ACTUAL de la ruta puede cerrar sus visitas.
+            // Antes NO se verificaba NINGUNA pertenencia: bastaba el permiso y que la visita no
+            // estuviera 'pending', así que cualquiera podía reportar una no-venta sobre la visita
+            // de otro vendedor —y eso CIERRA la parada en 'completed'—. Misma regla que marcar y vender.
+            const permiso = await autorizarSobreLaVisita({
+                visita: dayVisit, companyId: company_id, userId: user_id, transaction,
+            });
+            if (!permiso.autorizado) {
+                await transaction.rollback();
+                return res.status(403).json({ success: false, status: 403, message: permiso.mensaje });
             }
 
             // Verificar que no exista un reporte para la misma visita (si se proporciona visit_id)

@@ -42,6 +42,21 @@ router.post('/createSale',
     salesController.createSale
 );
 
+/**
+ * @route   GET /api/sales/pos-catalog
+ * @desc    Qué puede vender AHORA el usuario: modo de la compañía + bodega (si aplica) +
+ *          productos con su disponible (null cuando no hay control de inventario).
+ * @access  Privado — MISMO permiso que registrar la venta ('create_new_sale_in_route').
+ *          A propósito NO se gatea con permisos de inventario: quien puede vender debe poder
+ *          cargar lo que vende, aunque no tenga acceso al módulo de inventario.
+ */
+router.get('/pos-catalog',
+    verifyToken,
+    createQueryLimiter(),
+    checkPermission('create_new_sale_in_route'),
+    salesController.getPosCatalog
+);
+
 
 
 // 📊 RUTAS DE REPORTES Y ANALÍTICA (solo lectura)
@@ -126,6 +141,21 @@ router.get('/reports/cuadre',
     reportsLimiter,
     checkPermission('view_sales_reconciliation'),
     salesReportsController.getCuadre
+);
+
+/**
+ * @route   GET /api/sales/reports/lost-opportunity
+ * @desc    Oportunidad perdida del período: no-ventas y visitas planificadas no
+ *          realizadas, con una ESTIMACIÓN de lo que se dejó de vender (referencia:
+ *          el promedio de compra de cada tienda). Por defecto HOY.
+ * @query   from?, to?, user_id?
+ * @access  Privado — permiso 'view_sales_reconciliation' (vive en el Cuadre)
+ */
+router.get('/reports/lost-opportunity',
+    verifyToken,
+    reportsLimiter,
+    checkPermission('view_sales_reconciliation'),
+    salesReportsController.getLostOpportunity
 );
 
 /**

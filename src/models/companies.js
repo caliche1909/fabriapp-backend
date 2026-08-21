@@ -150,6 +150,12 @@ module.exports = function (sequelize, DataTypes) {
             defaultValue: 'America/Bogota',
             comment: 'Zona horaria IANA de la compañía (ej. America/Bogota). Usada para reportes y día hábil.'
         },
+        sales_inventory_mode: {
+            type: DataTypes.ENUM('sin_inventario', 'descuenta_central', 'descuenta_bodegas'),
+            allowNull: false,
+            defaultValue: 'sin_inventario',
+            comment: 'Qué hace una venta con el stock: no descuenta | descuenta de la central | descuenta de la bodega del vendedor'
+        },
         is_active: {
             type: DataTypes.BOOLEAN,
             allowNull: false,

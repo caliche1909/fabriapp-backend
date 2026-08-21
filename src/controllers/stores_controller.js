@@ -1,4 +1,5 @@
 const { stores, users, store_visits, roles } = require('../models');
+const { autorizarSobreLaVisita } = require('../utils/storeVisits');
 const { Op } = require('sequelize'); // ✅ Importar Op de Sequelize
 const bcrypt = require('bcrypt');
 
@@ -720,21 +721,31 @@ module.exports = {
             const companyId = req.user?.companyId;
             const rid = parseInt(route_id, 10);
 
-            // Día hábil del negocio (TZ America/Bogota) para proyectar el estado de
-            // visita del DÍA (no el estado histórico persistido en la tienda).
+            // Día hábil del negocio (zona horaria de la compañía, Capa B) para proyectar el
+            // estado de visita del DÍA (no el estado histórico persistido en la tienda).
+            const tz = req.user?.companyTimezone || 'America/Bogota';
             const [{ hoy }] = await stores.sequelize.query(
-                `SELECT (now() AT TIME ZONE 'America/Bogota')::date AS hoy`,
-                { type: stores.sequelize.QueryTypes.SELECT }
+                `SELECT (now() AT TIME ZONE :tz)::date AS hoy`,
+                { type: stores.sequelize.QueryTypes.SELECT, replacements: { tz } }
             );
 
-            // Visitas de HOY para esta ruta, SOLO las del usuario que consulta → mapa
-            // store_id -> visita más avanzada. Así las tarjetas reflejan el progreso de
-            // la lista propia y no la de otro usuario (aislamiento por user_id).
+            // Visitas de HOY de la JORNADA de esta ruta → mapa store_id -> visita más avanzada.
+            //
+            // La jornada se identifica por RUTA + DÍA, no por usuario: es la misma regla que ya
+            // usa `getRouteDayVisits` ("una ruta tiene un solo responsable por día"). Antes esto
+            // filtraba por `user_id: req.user.id`, y por eso un admin que abría la ruta de su
+            // vendedor veía TODAS las tarjetas en 'pending' aunque la jornada fuera por la mitad.
+            // El `visitRank` resuelve los datos antiguos que sí tienen dos responsables el mismo
+            // día quedándose con la visita más avanzada.
             const todayVisits = await store_visits.findAll({
-                where: { route_id: rid, visit_day: hoy, user_id: req.user.id },
+                where: { route_id: rid, visit_day: hoy },
                 attributes: ['id', 'store_id', 'status'],
                 raw: true,
             });
+
+            // ¿La ruta tiene jornada hoy? Es lo que permite distinguir "la ruta no se ha
+            // iniciado" de "la ruta está iniciada pero esta tienda no entró en la foto".
+            const hayJornadaHoy = todayVisits.length > 0;
             const visitRank = { pending: 1, visited: 2, completed: 3 };
             const visitByStore = new Map();
             for (const v of todayVisits) {
@@ -822,10 +833,19 @@ module.exports = {
                     storeData.images = [];
                 }
 
-                // 🔄 Proyectar el estado de visita del DÍA (si la ruta ya se inició).
-                // Sin visita de hoy ⇒ 'pending' (la ruta aún no se ha iniciado).
+                // 🔄 Proyectar el estado de visita del DÍA. Son TRES casos, no dos:
+                //   - hay parada           → su estado real ('pending' | 'visited' | 'completed').
+                //   - hay jornada, sin parada → 'sin_parada': la tienda se vinculó a la ruta
+                //     DESPUÉS de iniciarla, así que no se puede marcar (el servidor responde 409).
+                //     Sin este caso la tarjeta se veía igual que una pendiente real e invitaba a
+                //     marcar algo que iba a ser rechazado con un mensaje falso ("inicia la ruta",
+                //     cuando ya está iniciada). Se resuelve con el botón "Ajustar".
+                //   - no hay jornada       → 'pending': la ruta aún no se ha iniciado (ahí sí, el
+                //     mensaje de "primero inicia la ruta" es correcto).
                 const dayVisit = visitByStore.get(storeData.id);
-                storeData.current_visit_status = dayVisit ? dayVisit.status : 'pending';
+                storeData.current_visit_status = dayVisit
+                    ? dayVisit.status
+                    : (hayJornadaHoy ? 'sin_parada' : 'pending');
                 storeData.current_visit_id = dayVisit ? dayVisit.id : null;
                 // Contexto de ruta: el frontend usa route_id como la ruta abierta.
                 storeData.route_id = rid;
@@ -990,7 +1010,8 @@ module.exports = {
     // Usado por "Gestión de tiendas". Incluye las rutas a las que pertenece cada
     // tienda (member_routes, M2M) para poder mostrarlas.
     async getAllStores(req, res) {
-        const { company_id } = req.params;
+        // 🔒 Compañía SIEMPRE desde la sesión (no del path) → cierra IDOR multi-tenant.
+        const company_id = req.user.companyId;
 
         if (!company_id) {
             return res.status(400).json({
@@ -1091,9 +1112,10 @@ module.exports = {
 
             // Verificar que la tienda no tenga una visita EN CURSO hoy (visitada/vendida).
             // El estado de visita vive ahora en store_visits (no en la tienda).
+            const tz = req.user?.companyTimezone || 'America/Bogota';
             const [{ hoy }] = await stores.sequelize.query(
-                `SELECT (now() AT TIME ZONE 'America/Bogota')::date AS hoy`,
-                { type: stores.sequelize.QueryTypes.SELECT, transaction }
+                `SELECT (now() AT TIME ZONE :tz)::date AS hoy`,
+                { type: stores.sequelize.QueryTypes.SELECT, replacements: { tz }, transaction }
             );
             const visitaEnCurso = await store_visits.findOne({
                 where: { store_id: store.id, visit_day: hoy, status: ['visited', 'completed'] },
@@ -1329,8 +1351,9 @@ module.exports = {
                 });
             }
 
-            // 🔍 Buscar la tienda.
-            const store = await stores.findByPk(parseInt(store_id));
+            // 🔍 Buscar la tienda, acotada a la compañía de la sesión (defensa en profundidad
+            //    frente a IDOR; el boundary real es la visita acotada por user_id más abajo).
+            const store = await stores.findOne({ where: { id: parseInt(store_id), company_id: req.user.companyId } });
 
             if (!store) {
                 return res.status(404).json({
@@ -1343,21 +1366,25 @@ module.exports = {
             // Ruta en cuyo contexto se marca la visita: la envía el frontend en el body.
             const bodyRouteId = req.body.route_id ? parseInt(req.body.route_id) : null;
 
-            // Día hábil del negocio (TZ America/Bogota).
+            // Día hábil del negocio (zona horaria de la compañía, Capa B).
+            const tz = req.user?.companyTimezone || 'America/Bogota';
             const [{ hoy }] = await stores.sequelize.query(
-                `SELECT (now() AT TIME ZONE 'America/Bogota')::date AS hoy`,
-                { type: stores.sequelize.QueryTypes.SELECT }
+                `SELECT (now() AT TIME ZONE :tz)::date AS hoy`,
+                { type: stores.sequelize.QueryTypes.SELECT, replacements: { tz } }
             );
 
             transaction = await stores.sequelize.transaction();
 
-            // Buscar la parada del DÍA (visita) de esta tienda en la ruta para HOY.
-            // Acotado SIEMPRE a las visitas del propio usuario (incluido el owner):
-            // cada quien solo marca la lista que él mismo inició. Nadie puede actuar
-            // sobre la ruta de otro.
-            // ⚠️ NO se crean visitas ad-hoc: si la tienda no tiene una parada de hoy, se rechaza
-            //    (la ruta debe iniciarse primero para generar las paradas 'pending').
-            const visitWhere = { store_id: store.id, visit_day: hoy, user_id };
+            // Buscar la parada del DÍA (visita) de esta tienda para HOY.
+            //
+            // 🔑 Ya NO se acota por `user_id`. La parada pertenece a la JORNADA (ruta + día);
+            // quién puede tocarla lo decide el ENCARGADO ACTUAL de la ruta, no a nombre de quién
+            // quedó la fila. Ese cambio es el que permite el relevo a media jornada: si el
+            // vendedor se accidenta y se reasigna la ruta, el nuevo encargado continúa desde
+            // donde quedó, incluso sobre paradas que el anterior ya dejó en 'visited'.
+            // ⚠️ NO se crean visitas ad-hoc: si la tienda no tiene parada hoy se rechaza (la
+            //    ruta debe iniciarse primero, o ajustarse con el botón "Ajustar").
+            const visitWhere = { store_id: store.id, visit_day: hoy };
             if (bodyRouteId) visitWhere.route_id = bodyRouteId;
 
             const visitRecord = await store_visits.findOne({ where: visitWhere, transaction });
@@ -1371,6 +1398,15 @@ module.exports = {
                 });
             }
 
+            // 🔐 Solo el ENCARGADO ACTUAL de la ruta puede recorrerla (regla compartida).
+            const permiso = await autorizarSobreLaVisita({
+                visita: visitRecord, companyId: req.user.companyId, userId: user_id, transaction,
+            });
+            if (!permiso.autorizado) {
+                await transaction.rollback();
+                return res.status(403).json({ success: false, status: 403, message: permiso.mensaje });
+            }
+
             if (visitRecord.status === 'visited' || visitRecord.status === 'completed') {
                 await transaction.rollback();
                 return res.status(409).json({
@@ -1380,10 +1416,19 @@ module.exports = {
                 });
             }
 
-            // Avanzar la parada planificada 'pending' → 'visited'.
+            // Avanzar la parada planificada 'pending' → 'visited', SELLANDO quién lo hizo.
+            //
+            // `user_id`/`user_name` pasan a significar "quién resolvió esta parada". Es lo que
+            // hace que el histórico siga siendo verdadero tras un relevo: las paradas que hizo
+            // el primer vendedor quedan a su nombre y las del segundo al suyo, sin columnas
+            // nuevas. (La venta y el reporte de no-venta ya guardan su propio `user_id`.)
+            const actor = await users.findByPk(user_id, { attributes: ['first_name', 'last_name'], transaction });
+
             visitRecord.status = 'visited';
             visitRecord.distance = parsedDistance;
             visitRecord.arrived_at = new Date();
+            visitRecord.user_id = user_id;
+            if (actor) visitRecord.user_name = `${actor.first_name} ${actor.last_name}`.trim();
             await visitRecord.save({ transaction });
 
             await transaction.commit();

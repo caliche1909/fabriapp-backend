@@ -139,8 +139,6 @@ module.exports = router;
 
 // 🔄 OTROS ENDPOINTS CON LÍMITE GENERAL (NO ACTIVOS)
 // router.post('/logout', verifyToken, generalLimiter, userController.logout);
-// router.put('/set-default-company/:companyId', verifyToken, generalLimiter, userController.setDefaultCompany);
-// router.put('/switch-active-company/:companyId', verifyToken, generalLimiter, userController.switchActiveCompany);
 // router.get('/stats', verifyToken, queryLimiter, userController.getUserStats);
 
 // 🔍 CONSULTAS CON LÍMITE GENEROSO (NO ACTIVAS)

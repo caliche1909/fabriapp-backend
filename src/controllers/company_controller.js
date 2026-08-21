@@ -293,6 +293,9 @@ module.exports = {
                 website: updatedCompany.website,
                 logoUrl: updatedCompany.logo_url,
                 timezone: updatedCompany.timezone,
+                // Solo lectura aquí: el modo se cambia en Configuraciones, no en "Mi compañía".
+                // Se devuelve para que el payload de la compañía sea completo y coherente.
+                salesInventoryMode: updatedCompany.sales_inventory_mode,
                 latitude: responseLatitude,
                 longitude: responseLongitude,
             }

@@ -6,9 +6,10 @@ module.exports = {
 
     // 📌(Verificado 1.1) Método para obtener todos los insumos de una compañía
     async getListOfInventorySupplies(req, res) {
-      
+
         try {
-            const { company_id } = req.params;
+            // 🔒 Compañía SIEMPRE desde la sesión (no del path) → cierra IDOR multi-tenant.
+            const company_id = req.user.companyId;
 
             // 🔹 Validar parámetro obligatorio
             if (!company_id) {
@@ -96,8 +97,12 @@ module.exports = {
 
         try {
             // Extraer los datos del cuerpo de la solicitud
+            // 🔒 SEGURIDAD MULTI-TENANT: la compañía se deriva del usuario autenticado, NUNCA del body.
+            // Antes se usaba el company_id enviado por el cliente, lo que permitía crear insumos (y su
+            // balance, vía trigger) en una compañía arbitraria.
+            const companyId = req.user.companyId;
+
             let {
-                company_id,
                 name,
                 packaging_type,
                 packaging_weight,
@@ -117,7 +122,7 @@ module.exports = {
             name = name.trim().replace(/\s+/g, " ").toUpperCase();
 
             // 🔹 Validar datos obligatorios
-            if (!company_id || !name || !packaging_type || !packaging_weight || !packaging_unit_id || !packaging_price || !unit_price
+            if (!name || !packaging_type || !packaging_weight || !packaging_unit_id || !packaging_price || !unit_price
                 || !portions || !portion_unit_id || !portion_price || !total_quantity_gr_ml_und || !supplier_id || minimum_stock <= 0 || minimum_stock === undefined) {
                 return res.status(400).json({
                     success: false,
@@ -138,7 +143,7 @@ module.exports = {
 
             // 🔹 Crear el insumo directamente
             const newSupply = await inventory_supplies.create({
-                company_id,
+                company_id: companyId,
                 name,
                 packaging_type,
                 packaging_weight,

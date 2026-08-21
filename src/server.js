@@ -17,6 +17,7 @@ const storesRoutes = require('./routes/storesRoutes');
 const uploadImagesRoutes = require('./routes/uploadImagesRoutes');
 const registerCompanyAndUserRoutes = require('./routes/registerCompanyAndUserRoutes');
 const companyRoutes = require('./routes/companyRoutes');
+const companySettingsRoutes = require('./routes/companySettingsRoutes');
 const rolesRoutes = require('./routes/rolesRoutes');
 const modulesRoutes = require('./routes/modulesRoutes');
 const geocodingRoutes = require('./routes/geocodingRoutes');
@@ -24,6 +25,12 @@ const storeNoSaleReportsRoutes = require('./routes/store_no_sale_reports_routes'
 const noSaleCategoriesRoutes = require('./routes/no_sale_categories_routes');
 const paymetMethodsRoutes = require('./routes/paymetMethodsRoutes');
 const salesRoutes = require('./routes/sales_routes');
+const productsRoutes = require('./routes/productsRoutes');
+const productCategoriesRoutes = require('./routes/productCategoriesRoutes');
+const productPresentationsRoutes = require('./routes/productPresentationsRoutes');
+const productStockRoutes = require('./routes/productStockRoutes');
+const warehouseRoutes = require('./routes/warehouseRoutes');
+const stockTransferRoutes = require('./routes/stockTransferRoutes');
 const http = require('http');
 const initSockets = require('./sockets');
 
@@ -57,7 +64,7 @@ const corsOptions = {
         }
     },
     credentials: true, // Permitir cookies y headers de autenticación
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
 };
 app.use(cors(corsOptions));
@@ -121,6 +128,7 @@ app.use('/api/stores', storesRoutes);
 app.use('/api/upload_images', uploadImagesRoutes);
 app.use('/api/register-company-and-user', registerCompanyAndUserRoutes);
 app.use('/api/company', companyRoutes);
+app.use('/api/company_settings', companySettingsRoutes);
 app.use('/api/roles', rolesRoutes);
 app.use('/api/modules', modulesRoutes);
 app.use('/api/geocoding', geocodingRoutes);
@@ -128,6 +136,12 @@ app.use('/api/store_no_sale_reports', storeNoSaleReportsRoutes);
 app.use('/api/no_sale_categories', noSaleCategoriesRoutes);
 app.use('/api/payment_methods', paymetMethodsRoutes);
 app.use('/api/sales', salesRoutes);
+app.use('/api/products', productsRoutes);
+app.use('/api/product_categories', productCategoriesRoutes);
+app.use('/api/product_presentations', productPresentationsRoutes);
+app.use('/api/products_stock', productStockRoutes);
+app.use('/api/warehouses', warehouseRoutes);
+app.use('/api/stock_transfers', stockTransferRoutes);
 
 
 // Puerto del servidor: intenta el puerto por defecto y, si está ocupado

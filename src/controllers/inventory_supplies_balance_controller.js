@@ -5,9 +5,12 @@ module.exports = {
     async getListInventorySuppliesBalance(req, res) {
         
         try {
-            const { company_id } = req.params;
+            // 🔒 SEGURIDAD MULTI-TENANT: la compañía SIEMPRE se deriva del usuario autenticado
+            // (req.user.companyId), NUNCA del parámetro de la URL. Antes se usaba req.params.company_id,
+            // lo que permitía que cualquier usuario autenticado leyera los balances de OTRA compañía
+            // (IDOR). El :company_id de la ruta se mantiene por compatibilidad pero se ignora.
+            const company_id = req.user.companyId;
 
-            // 🔹 Validar parámetro obligatorio
             if (!company_id) {
                 return res.status(400).json({
                     success: false,

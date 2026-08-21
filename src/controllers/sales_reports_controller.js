@@ -12,9 +12,10 @@ const { QueryTypes } = require('sequelize');
  * Todas las fechas se agrupan/filtran en la zona horaria local del negocio.
  */
 
-// Zona horaria del negocio para agrupar y filtrar por día/mes/año.
-// (Colombia). Si el negocio opera en otra zona, cámbiala aquí.
-const TZ = 'America/Bogota';
+// Zona horaria por defecto (fallback). La zona REAL se toma por compañía desde
+// `req.user.companyTimezone` (Capa B) en cada handler; este valor solo aplica si
+// esa compañía no tuviera zona configurada (no debería, la columna es NOT NULL).
+const DEFAULT_TZ = 'America/Bogota';
 
 // Formatos de agrupación temporal permitidos (whitelist anti-inyección).
 const GRANULARITIES = {
@@ -27,7 +28,7 @@ const GRANULARITIES = {
  * Resuelve el rango de fechas [from, to] (YYYY-MM-DD). Si no se envían, usa el
  * rango completo de ventas de la compañía para que siempre se muestren datos.
  */
-async function resolveRange(companyId, from, to) {
+async function resolveRange(companyId, tz, from, to) {
     const isValid = (d) => typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d);
     if (isValid(from) && isValid(to)) {
         return { from, to };
@@ -35,7 +36,7 @@ async function resolveRange(companyId, from, to) {
     const [row] = await sequelize.query(
         `SELECT MIN(sale_date AT TIME ZONE :tz)::date AS min, MAX(sale_date AT TIME ZONE :tz)::date AS max
          FROM sales WHERE company_id = :cid AND deleted_at IS NULL`,
-        { type: QueryTypes.SELECT, replacements: { cid: companyId, tz: TZ } }
+        { type: QueryTypes.SELECT, replacements: { cid: companyId, tz } }
     );
     const today = new Date().toISOString().slice(0, 10);
     return {
@@ -48,6 +49,63 @@ async function resolveRange(companyId, from, to) {
 const SALES_WHERE = `sa.company_id = :cid AND sa.deleted_at IS NULL
     AND (sa.sale_date AT TIME ZONE :tz)::date BETWEEN :from AND :to`;
 
+/**
+ * 📐 REFERENCIA DE COMPRA POR TIENDA — cuánto suele comprar cada tienda.
+ *
+ * Es la base para estimar lo que se dejó de vender cuando una tienda no compra o
+ * no se visita. Se usa tanto en el detalle del Cuadre como en la sección de
+ * oportunidad perdida, por eso vive aquí y no dentro de un handler.
+ *
+ * Criterio: promedio de los ÚLTIMOS 90 DÍAS si la tienda tiene al menos 2 ventas
+ * ahí (refleja precios y hábitos actuales); si no, el promedio de todo su
+ * historial (tiendas de compra esporádica). Solo se promedian visitas con venta
+ * > 0: incluir los ceros hundiría la referencia hasta volverla inútil.
+ *
+ * Las tiendas que NUNCA han comprado no aparecen aquí: al hacer LEFT JOIN quedan
+ * con `promedio` NULL, y quien consuma esto debe contarlas aparte (no estimarlas).
+ *
+ * Requiere los replacements :cid, :tz y :to. Se inserta tras un `WITH`.
+ *
+ * NOTA 1: se usa CAST(:to AS date) y no `:to::date` para no confundir al parser de
+ * replacements de Sequelize con el `::` de PostgreSQL.
+ *
+ * ⚠️ NOTA 2 — `AS MATERIALIZED` NO ES DECORATIVO. Desde PostgreSQL 12 los CTE
+ * referenciados una sola vez se inlinean, y aquí el planificador elegía un nested
+ * loop que **recalculaba esta referencia una vez por cada fila** del resultado
+ * (888 iteraciones medidas → 602 ms). Forzando la materialización se computa una
+ * sola vez y el plan pasa a hash join: **40 ms, 15× más rápido**. Si algún día se
+ * quita esta palabra, el rendimiento se desploma en silencio.
+ */
+const CTE_REFERENCIA_TIENDA = `
+    ref_reciente AS (
+        SELECT sv.store_id, AVG(sv.sale_amount) AS promedio, COUNT(*)::int AS n
+        FROM store_visits sv
+        JOIN stores st ON st.id = sv.store_id
+        WHERE st.company_id = :cid
+          AND sv.sale_amount > 0
+          AND (sv.date AT TIME ZONE :tz)::date
+              BETWEEN (CAST(:to AS date) - INTERVAL '90 days') AND CAST(:to AS date)
+        GROUP BY sv.store_id
+    ),
+    ref_historica AS (
+        SELECT sv.store_id,
+               AVG(sv.sale_amount) AS promedio,
+               MAX(sv.date) AS ultima_compra
+        FROM store_visits sv
+        JOIN stores st ON st.id = sv.store_id
+        WHERE st.company_id = :cid AND sv.sale_amount > 0
+        GROUP BY sv.store_id
+    ),
+    referencia AS MATERIALIZED (
+        SELECT h.store_id,
+               CASE WHEN r.n >= 2 THEN r.promedio ELSE h.promedio END AS promedio,
+               CASE WHEN r.n >= 2 THEN 'reciente' ELSE 'historico' END AS origen,
+               h.ultima_compra
+        FROM ref_historica h
+        LEFT JOIN ref_reciente r ON r.store_id = h.store_id
+    )
+`;
+
 module.exports = {
     /**
      * 📌 GET /api/sales/reports/summary?from&to
@@ -56,8 +114,9 @@ module.exports = {
     async getSummary(req, res) {
         try {
             const cid = req.user.companyId;
-            const { from, to } = await resolveRange(cid, req.query.from, req.query.to);
-            const repl = { cid, tz: TZ, from, to };
+            const tz = req.user.companyTimezone || DEFAULT_TZ;
+            const { from, to } = await resolveRange(cid, tz, req.query.from, req.query.to);
+            const repl = { cid, tz, from, to };
 
             const [kpis] = await sequelize.query(
                 `SELECT
@@ -128,9 +187,10 @@ module.exports = {
     async getAnalytics(req, res) {
         try {
             const cid = req.user.companyId;
-            const { from, to } = await resolveRange(cid, req.query.from, req.query.to);
+            const tz = req.user.companyTimezone || DEFAULT_TZ;
+            const { from, to } = await resolveRange(cid, tz, req.query.from, req.query.to);
             const g = GRANULARITIES[req.query.granularity] || GRANULARITIES.month;
-            const repl = { cid, tz: TZ, from, to };
+            const repl = { cid, tz, from, to };
 
             const serie = await sequelize.query(
                 `SELECT to_char(date_trunc('${g.trunc}', sa.sale_date AT TIME ZONE :tz), '${g.format}') AS periodo,
@@ -208,14 +268,15 @@ module.exports = {
     async getSalesList(req, res) {
         try {
             const cid = req.user.companyId;
-            const { from, to } = await resolveRange(cid, req.query.from, req.query.to);
+            const tz = req.user.companyTimezone || DEFAULT_TZ;
+            const { from, to } = await resolveRange(cid, tz, req.query.from, req.query.to);
             const page = Math.max(1, parseInt(req.query.page, 10) || 1);
             const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 25));
             const offset = (page - 1) * limit;
 
             // Filtros opcionales adicionales.
             const filters = [];
-            const repl = { cid, tz: TZ, from, to, limit, offset };
+            const repl = { cid, tz, from, to, limit, offset };
             if (req.query.store_id) { filters.push('AND sa.store_id = :store_id'); repl.store_id = parseInt(req.query.store_id, 10); }
             if (req.query.user_id) { filters.push('AND sa.user_id = :user_id'); repl.user_id = req.query.user_id; }
             if (req.query.payment_method_id) { filters.push('AND sa.payment_method_id = :payment_method_id'); repl.payment_method_id = parseInt(req.query.payment_method_id, 10); }
@@ -267,8 +328,9 @@ module.exports = {
     async getNoSaleReport(req, res) {
         try {
             const cid = req.user.companyId;
-            const { from, to } = await resolveRange(cid, req.query.from, req.query.to);
-            const repl = { cid, tz: TZ, from, to };
+            const tz = req.user.companyTimezone || DEFAULT_TZ;
+            const { from, to } = await resolveRange(cid, tz, req.query.from, req.query.to);
+            const repl = { cid, tz, from, to };
             const WHERE = `r.company_id = :cid AND (r.created_at AT TIME ZONE :tz)::date BETWEEN :from AND :to`;
 
             const [tot] = await sequelize.query(
@@ -316,7 +378,8 @@ module.exports = {
     async getNoSaleReportDetail(req, res) {
         try {
             const cid = req.user.companyId;
-            const { from, to } = await resolveRange(cid, req.query.from, req.query.to);
+            const tz = req.user.companyTimezone || DEFAULT_TZ;
+            const { from, to } = await resolveRange(cid, tz, req.query.from, req.query.to);
 
             // Paginación con topes defensivos.
             const page = Math.max(1, parseInt(req.query.page) || 1);
@@ -325,7 +388,7 @@ module.exports = {
 
             // Filtros opcionales (todos parametrizados para evitar inyección).
             const { categoryId, reasonId, sellerId, storeId } = req.query;
-            const repl = { cid, tz: TZ, from, to, limit, offset };
+            const repl = { cid, tz, from, to, limit, offset };
             let WHERE = `r.company_id = :cid AND (r.created_at AT TIME ZONE :tz)::date BETWEEN :from AND :to`;
             if (categoryId) { WHERE += ' AND r.category_id = :categoryId'; repl.categoryId = categoryId; }
             if (reasonId) { WHERE += ' AND r.reason_id = :reasonId'; repl.reasonId = reasonId; }
@@ -409,6 +472,7 @@ module.exports = {
     async getCuadre(req, res) {
         try {
             const cid = req.user.companyId;
+            const tz = req.user.companyTimezone || DEFAULT_TZ;
 
             // Rango por defecto: HOY (fecha local del negocio).
             const isValid = (d) => typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d);
@@ -416,7 +480,7 @@ module.exports = {
             if (!isValid(from) || !isValid(to)) {
                 const [t] = await sequelize.query(
                     `SELECT (now() AT TIME ZONE :tz)::date AS hoy`,
-                    { type: QueryTypes.SELECT, replacements: { tz: TZ } }
+                    { type: QueryTypes.SELECT, replacements: { tz } }
                 );
                 const hoy = String(t.hoy).slice(0, 10);
                 if (!isValid(from)) from = hoy;
@@ -424,18 +488,32 @@ module.exports = {
             }
 
             const userId = req.query.user_id || null;
-            const repl = { cid, tz: TZ, from, to, user_id: userId };
+            const repl = { cid, tz, from, to, user_id: userId };
 
-            // Filtros por vendedor (opcionales) para visitas y ventas.
+            // Filtros por vendedor (opcionales). El de visitas apunta a `store_visits.user_id`,
+            // que es quien REALMENTE tuvo esa parada ese día (tras un relevo, el que la resolvió).
             const visitUserFilter = userId ? 'AND sv.user_id = :user_id' : '';
             const saleUserFilter = userId ? 'AND sa.user_id = :user_id' : '';
-            // Para la cobertura de rutas el vendedor es el ASIGNADO a la ruta (routes.user_id).
-            const routeUserFilter = userId ? 'AND r.user_id = :user_id' : '';
+
+            // Todas las filas de visita del período, sin filtrar por estado ni por ruta. Las
+            // agregaciones de abajo separan con FILTER lo que corresponde a cada cifra, para que
+            // TODA la pantalla se lea de una sola fuente y las tarjetas nunca se contradigan.
+            //
+            // Se filtra por `sv.date` (no por `visit_day`) igual que el resto del módulo; hoy
+            // ambas columnas coinciden en el 100% de las filas.
+            //
+            // Las tiendas con soft-delete NO se excluyen a propósito: lo que pasó, pasó, y un
+            // reporte histórico no puede cambiar porque alguien borre la tienda después.
+            const PERIODO_WHERE = `st.company_id = :cid
+                AND (sv.date AT TIME ZONE :tz)::date BETWEEN :from AND :to ${visitUserFilter}`;
 
             // Solo visitas REALES (no las paradas 'pending' planificadas sin visitar).
-            const VISITS_WHERE = `st.company_id = :cid
-                AND sv.status IN ('visited', 'completed')
-                AND (sv.date AT TIME ZONE :tz)::date BETWEEN :from AND :to ${visitUserFilter}`;
+            const VISITS_WHERE = `${PERIODO_WHERE} AND sv.status IN ('visited', 'completed')`;
+
+            // La JORNADA: paradas que se crearon al iniciar la ruta, en cualquier estado. Es la
+            // base de la cobertura. Se exige `route_id` porque una visita suelta (fuera de ruta)
+            // fue real, pero nadie la había programado.
+            const JORNADA_WHERE = `${PERIODO_WHERE} AND sv.route_id IS NOT NULL`;
             const CUADRE_SALES_WHERE = `sa.company_id = :cid AND sa.deleted_at IS NULL AND sa.status = 'completed'
                 AND (sa.sale_date AT TIME ZONE :tz)::date BETWEEN :from AND :to ${saleUserFilter}`;
 
@@ -450,106 +528,45 @@ module.exports = {
                 { type: QueryTypes.SELECT, replacements: repl }
             );
 
-            // Desglose por vendedor (cuánto vendió cada uno en el período).
+            // 🗺️ COBERTURA — sale de la JORNADA REAL, no del calendario de la ruta.
+            //
+            // Antes se calculaba desde `routes.working_days` + `routes_stores` + `routes.user_id`,
+            // es decir desde el estado de HOY. Eso producía dos mentiras:
+            //   1. Días sin jornada con tiendas "programadas" y "sin visitar" en rojo (nadie
+            //      inició la ruta: no había nada programado ni nada incumplido).
+            //   2. Las paradas se le cargaban al encargado ACTUAL de la ruta aunque el período
+            //      fuera de meses atrás y la hubiera trabajado otra persona.
+            // Ahora "programada" = existe la fila en `store_visits`, y "sin visitar" = esa fila
+            // sigue en 'pending'. Si no se programó nada, sale cero.
+            const [cobertura] = await sequelize.query(
+                `SELECT COUNT(*)::int AS programadas,
+                        COUNT(*) FILTER (WHERE sv.status IN ('visited', 'completed'))::int AS visitadas,
+                        COUNT(*) FILTER (WHERE sv.status = 'pending')::int AS no_visitadas,
+                        COUNT(DISTINCT sv.route_id)::int AS num_rutas
+                 FROM store_visits sv JOIN stores st ON st.id = sv.store_id
+                 WHERE ${JORNADA_WHERE}`,
+                { type: QueryTypes.SELECT, replacements: repl }
+            );
+
+            // Desglose por vendedor: actividad y cobertura en la MISMA consulta, agrupando por
+            // `sv.user_id`. Antes eran dos consultas de fuentes distintas fusionadas en JS, y por
+            // eso salían filas de vendedores con 0 visitas y decenas de tiendas "sin visitar".
             const porVendedor = await sequelize.query(
                 `SELECT sv.user_id,
                         TRIM(u.first_name || ' ' || COALESCE(u.last_name, '')) AS nombre,
-                        COUNT(*)::int AS visitas,
-                        COUNT(*) FILTER (WHERE sv.sale_amount > 0)::int AS con_venta,
-                        COUNT(*) FILTER (WHERE sv.sale_amount = 0)::int AS sin_venta,
-                        COALESCE(SUM(sv.sale_amount), 0)::float8 AS total_vendido
+                        COUNT(*) FILTER (WHERE sv.route_id IS NOT NULL)::int AS programadas,
+                        COUNT(*) FILTER (WHERE sv.route_id IS NOT NULL AND sv.status = 'pending')::int AS no_visitadas,
+                        COUNT(*) FILTER (WHERE sv.status IN ('visited', 'completed'))::int AS visitas,
+                        COUNT(*) FILTER (WHERE sv.status IN ('visited', 'completed') AND sv.sale_amount > 0)::int AS con_venta,
+                        COUNT(*) FILTER (WHERE sv.status IN ('visited', 'completed') AND sv.sale_amount = 0)::int AS sin_venta,
+                        COALESCE(SUM(sv.sale_amount) FILTER (WHERE sv.status IN ('visited', 'completed')), 0)::float8 AS total_vendido
                  FROM store_visits sv
                  JOIN stores st ON st.id = sv.store_id
                  JOIN users u ON u.id = sv.user_id
-                 WHERE ${VISITS_WHERE}
-                 GROUP BY sv.user_id, nombre ORDER BY total_vendido DESC`,
+                 WHERE ${PERIODO_WHERE}
+                 GROUP BY sv.user_id, nombre
+                 ORDER BY total_vendido DESC, programadas DESC`,
                 { type: QueryTypes.SELECT, replacements: repl }
-            );
-
-            // 🗺️ COBERTURA DE RUTAS
-            // "Rutas del período" = rutas cuyos working_days incluyen alguno de los días
-            // de la semana cubiertos por [from, to]. Las tiendas de esas rutas son las que
-            // "debían visitarse"; se marcan como visitadas si tuvieron ≥1 visita en el rango.
-            // El vendedor de cada tienda es el ASIGNADO a su ruta (routes.user_id).
-            const COBERTURA_CTE = `
-                WITH dias AS (
-                    SELECT DISTINCT CASE trim(to_char(d, 'ID'))
-                        WHEN '1' THEN 'lunes' WHEN '2' THEN 'martes' WHEN '3' THEN 'miercoles'
-                        WHEN '4' THEN 'jueves' WHEN '5' THEN 'viernes' WHEN '6' THEN 'sabado'
-                        WHEN '7' THEN 'domingo' END AS dia
-                    FROM generate_series(:from::date, :to::date, interval '1 day') d
-                ),
-                rutas_periodo AS (
-                    SELECT r.id, r.user_id
-                    FROM routes r
-                    WHERE r.company_id = :cid AND r.deleted_at IS NULL
-                      AND r.working_days::text[] && (SELECT array_agg(dia) FROM dias)
-                      ${routeUserFilter}
-                ),
-                tiendas_prog AS (
-                    -- La relación tienda↔ruta vive en routes_stores (M2M); stores.route_id
-                    -- se eliminó en la Fase 7. Cada par (tienda, ruta activa del período) es
-                    -- una parada programada, con el vendedor asignado a esa ruta.
-                    SELECT rs.store_id AS store_id, rp.user_id AS seller_id
-                    FROM routes_stores rs
-                    JOIN rutas_periodo rp ON rp.id = rs.route_id
-                    JOIN stores s ON s.id = rs.store_id
-                    WHERE s.deleted_at IS NULL
-                ),
-                marcadas AS (
-                    SELECT tp.store_id, tp.seller_id,
-                        EXISTS (SELECT 1 FROM store_visits sv
-                                WHERE sv.store_id = tp.store_id
-                                  AND sv.status IN ('visited', 'completed')
-                                  AND (sv.date AT TIME ZONE :tz)::date BETWEEN :from AND :to) AS visitada
-                    FROM tiendas_prog tp
-                )`;
-
-            const [coberturaResumen] = await sequelize.query(
-                `${COBERTURA_CTE}
-                 SELECT COUNT(*)::int AS programadas,
-                        COUNT(*) FILTER (WHERE visitada)::int AS visitadas,
-                        COUNT(*) FILTER (WHERE NOT visitada)::int AS no_visitadas,
-                        (SELECT COUNT(*)::int FROM rutas_periodo) AS num_rutas
-                 FROM marcadas`,
-                { type: QueryTypes.SELECT, replacements: repl }
-            );
-
-            const coberturaVendedor = await sequelize.query(
-                `${COBERTURA_CTE}
-                 SELECT m.seller_id AS user_id,
-                        TRIM(u.first_name || ' ' || COALESCE(u.last_name, '')) AS nombre,
-                        COUNT(*)::int AS programadas,
-                        COUNT(*) FILTER (WHERE m.visitada)::int AS visitadas,
-                        COUNT(*) FILTER (WHERE NOT m.visitada)::int AS no_visitadas
-                 FROM marcadas m LEFT JOIN users u ON u.id = m.seller_id
-                 WHERE m.seller_id IS NOT NULL
-                 GROUP BY m.seller_id, nombre`,
-                { type: QueryTypes.SELECT, replacements: repl }
-            );
-
-            // Fusionar actividad de ventas (porVendedor) con cobertura de rutas por vendedor.
-            const vendedorMap = new Map();
-            for (const v of porVendedor) {
-                vendedorMap.set(v.user_id, {
-                    user_id: v.user_id, nombre: v.nombre,
-                    visitas: v.visitas, con_venta: v.con_venta, sin_venta: v.sin_venta,
-                    total_vendido: v.total_vendido, programadas: 0, no_visitadas: 0,
-                });
-            }
-            for (const c of coberturaVendedor) {
-                const cur = vendedorMap.get(c.user_id) || {
-                    user_id: c.user_id, nombre: c.nombre,
-                    visitas: 0, con_venta: 0, sin_venta: 0, total_vendido: 0,
-                    programadas: 0, no_visitadas: 0,
-                };
-                cur.nombre = cur.nombre || c.nombre;
-                cur.programadas = c.programadas;
-                cur.no_visitadas = c.no_visitadas;
-                vendedorMap.set(c.user_id, cur);
-            }
-            const porVendedorMerged = [...vendedorMap.values()].sort(
-                (a, b) => (b.total_vendido - a.total_vendido) || (b.programadas - a.programadas)
             );
 
             // Cuadre por método de pago: cuánto cobrar en cada uno (fuente: ventas).
@@ -564,14 +581,18 @@ module.exports = {
             );
 
             // Detalle: una fila por visita, con su resultado (venta o motivo de no-venta).
+            // En las visitas SIN venta se adjunta `estimado_perdido`: lo que esa tienda
+            // suele comprar, para poder mostrarlo en rojo en la tabla.
             const detalle = await sequelize.query(
-                `SELECT sv.id AS visit_id, sv.date AS fecha,
+                `WITH ${CTE_REFERENCIA_TIENDA}
+                 SELECT sv.id AS visit_id, sv.date AS fecha,
                         COALESCE(sv.store_name, st.name) AS store_name,
                         sv.user_id,
                         TRIM(u.first_name || ' ' || COALESCE(u.last_name, '')) AS vendedor,
                         sa.id AS sale_id, sa.total_amount::float8 AS total,
                         pm.name AS payment_method,
-                        rs.name AS no_sale_reason, c.name AS no_sale_category
+                        rs.name AS no_sale_reason, c.name AS no_sale_category,
+                        CASE WHEN sa.id IS NULL THEN ref.promedio::float8 END AS estimado_perdido
                  FROM store_visits sv
                  JOIN stores st ON st.id = sv.store_id
                  JOIN users u ON u.id = sv.user_id
@@ -580,6 +601,7 @@ module.exports = {
                  LEFT JOIN store_no_sale_reports nsr ON nsr.visit_id = sv.id
                  LEFT JOIN no_sale_reasons rs ON rs.id = nsr.reason_id
                  LEFT JOIN no_sale_categories c ON c.id = nsr.category_id
+                 LEFT JOIN referencia ref ON ref.store_id = sv.store_id
                  WHERE ${VISITS_WHERE}
                  ORDER BY sv.date DESC
                  LIMIT 2000`,
@@ -592,8 +614,8 @@ module.exports = {
                     range: { from, to },
                     user_id: userId,
                     resumen: { ...resumen, num_ventas: resumen.con_venta },
-                    cobertura: coberturaResumen,
-                    por_vendedor: porVendedorMerged,
+                    cobertura,
+                    por_vendedor: porVendedor,
                     por_metodo_pago: porMetodoPago,
                     detalle,
                     detalle_truncado: detalle.length >= 2000,
@@ -602,6 +624,173 @@ module.exports = {
         } catch (error) {
             console.error('Error en getCuadre:', error);
             return res.status(500).json({ success: false, message: 'Error al obtener el cuadre de ventas' });
+        }
+    },
+
+    /**
+     * 📌 GET /api/sales/reports/lost-opportunity?from&to&user_id
+     * Oportunidad perdida del período: no-ventas (se visitó y no compró) y
+     * no-visitas (parada planificada que quedó `pending`), con una ESTIMACIÓN
+     * de cuánto se dejó de vender. Por defecto HOY, igual que el Cuadre.
+     *
+     * ⚠️ La cifra es una ESTIMACIÓN, no una pérdida contable. La referencia de
+     * cada tienda es su propio promedio de compra:
+     *   - Preferente: promedio de los últimos 90 días, si tiene ≥2 ventas ahí
+     *     (refleja precios y hábitos actuales).
+     *   - Respaldo: promedio de todo su historial (tiendas de compra esporádica).
+     * Solo se promedian visitas con venta > 0: incluir los ceros hundiría la
+     * referencia hasta volverla inútil.
+     * Las tiendas que nunca han comprado no tienen referencia; sus casos se
+     * cuentan en `sin_referencia` y NO suman al estimado (ni se inflan ni se ocultan).
+     *
+     * ⚠️ `no_visitas` solo ve rutas que SÍ se iniciaron: las paradas se crean al
+     * arrancar la ruta. Si un vendedor nunca la inició, esas tiendas no existen
+     * como visita y quedan fuera. Por eso la cifra es siempre conservadora.
+     */
+    async getLostOpportunity(req, res) {
+        try {
+            const cid = req.user.companyId;
+            const tz = req.user.companyTimezone || DEFAULT_TZ;
+
+            // Mismo rango por defecto que el Cuadre: HOY (fecha local del negocio).
+            const isValid = (d) => typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d);
+            let { from, to } = req.query;
+            if (!isValid(from) || !isValid(to)) {
+                const [t] = await sequelize.query(
+                    `SELECT (now() AT TIME ZONE :tz)::date AS hoy`,
+                    { type: QueryTypes.SELECT, replacements: { tz } }
+                );
+                const hoy = String(t.hoy).slice(0, 10);
+                if (!isValid(from)) from = hoy;
+                if (!isValid(to)) to = hoy;
+            }
+
+            const userId = req.query.user_id || null;
+            const repl = { cid, tz, from, to, user_id: userId };
+            const userFilter = userId ? 'AND sv.user_id = :user_id' : '';
+
+            // La referencia por tienda es la misma que usa el detalle del Cuadre.
+            const CTE_CASOS = `
+                WITH ${CTE_REFERENCIA_TIENDA},
+                casos AS (
+                    SELECT sv.id AS visit_id, sv.store_id, sv.user_id,
+                           st.name AS store_name,
+                           CASE WHEN sv.status = 'pending' THEN 'no_visita' ELSE 'no_venta' END AS tipo,
+                           nsr.category_id, nsr.reason_id,
+                           ref.promedio AS estimado
+                    FROM store_visits sv
+                    JOIN stores st ON st.id = sv.store_id
+                    LEFT JOIN store_no_sale_reports nsr ON nsr.visit_id = sv.id
+                    LEFT JOIN referencia ref ON ref.store_id = sv.store_id
+                    WHERE st.company_id = :cid
+                      AND (sv.date AT TIME ZONE :tz)::date BETWEEN :from AND :to
+                      AND (
+                            -- Se visitó pero no compró. Se aceptan los DOS estados:
+                            -- 'visited' (histórico) y 'completed' (actual).
+                            (sv.status IN ('visited', 'completed') AND COALESCE(sv.sale_amount, 0) = 0)
+                            -- Parada planificada que nunca se hizo.
+                            OR sv.status = 'pending'
+                          )
+                      ${userFilter}
+                )
+            `;
+
+            // Resumen general del período.
+            const [resumen] = await sequelize.query(
+                `${CTE_CASOS}
+                 SELECT COUNT(*)::int AS casos,
+                        COUNT(*) FILTER (WHERE tipo = 'no_venta')::int AS no_ventas,
+                        COUNT(*) FILTER (WHERE tipo = 'no_visita')::int AS no_visitas,
+                        COUNT(*) FILTER (WHERE estimado IS NULL)::int AS sin_referencia,
+                        COALESCE(SUM(estimado), 0)::float8 AS estimado_total,
+                        COALESCE(AVG(estimado), 0)::float8 AS estimado_promedio
+                 FROM casos`,
+                { type: QueryTypes.SELECT, replacements: repl }
+            );
+
+            // Desglose por vendedor: dónde se concentra la pérdida.
+            const porVendedor = await sequelize.query(
+                `${CTE_CASOS}
+                 SELECT c.user_id,
+                        TRIM(u.first_name || ' ' || COALESCE(u.last_name, '')) AS nombre,
+                        COUNT(*)::int AS casos,
+                        COUNT(*) FILTER (WHERE c.tipo = 'no_venta')::int AS no_ventas,
+                        COUNT(*) FILTER (WHERE c.tipo = 'no_visita')::int AS no_visitas,
+                        COUNT(*) FILTER (WHERE c.estimado IS NULL)::int AS sin_referencia,
+                        COALESCE(SUM(c.estimado), 0)::float8 AS estimado_total,
+                        COALESCE(AVG(c.estimado), 0)::float8 AS estimado_promedio
+                 FROM casos c
+                 JOIN users u ON u.id = c.user_id
+                 GROUP BY c.user_id, u.first_name, u.last_name
+                 ORDER BY estimado_total DESC`,
+                { type: QueryTypes.SELECT, replacements: repl }
+            );
+
+            // Desglose por motivo: qué hay que atacar.
+            const porMotivo = await sequelize.query(
+                `${CTE_CASOS}
+                 SELECT COALESCE(cat.name, 'Sin categoría') AS categoria,
+                        COALESCE(rs.name,
+                                 CASE WHEN c.tipo = 'no_visita'
+                                      THEN 'Visita planificada no realizada'
+                                      ELSE 'Sin motivo registrado' END) AS motivo,
+                        COUNT(*)::int AS casos,
+                        COALESCE(SUM(c.estimado), 0)::float8 AS estimado_total
+                 FROM casos c
+                 LEFT JOIN no_sale_categories cat ON cat.id = c.category_id
+                 LEFT JOIN no_sale_reasons rs ON rs.id = c.reason_id
+                 GROUP BY 1, 2
+                 ORDER BY estimado_total DESC, casos DESC
+                 LIMIT 30`,
+                { type: QueryTypes.SELECT, replacements: repl }
+            );
+
+            // Detalle de las visitas PLANIFICADAS QUE NO SE HICIERON (status 'pending').
+            // Es la información que hoy no se ve en ningún otro sitio: el detalle del
+            // Cuadre solo incluye visitas realizadas ('visited'/'completed').
+            //
+            // Se ordena por importe estimado, NO por fecha: con cientos de casos, lo
+            // accionable es saber qué tiendas grandes se quedaron sin visitar, no en
+            // qué orden ocurrió. `ultima_compra` distingue el descuido puntual del
+            // cliente que se está perdiendo.
+            const detalleNoVisitadas = await sequelize.query(
+                `WITH ${CTE_REFERENCIA_TIENDA}
+                 SELECT sv.id AS visit_id, sv.date AS fecha,
+                        COALESCE(sv.store_name, st.name) AS store_name,
+                        sv.user_id,
+                        TRIM(u.first_name || ' ' || COALESCE(u.last_name, '')) AS vendedor,
+                        COALESCE(sv.route_name, r.name) AS route_name,
+                        ref.promedio::float8 AS estimado_perdido,
+                        ref.ultima_compra
+                 FROM store_visits sv
+                 JOIN stores st ON st.id = sv.store_id
+                 JOIN users u ON u.id = sv.user_id
+                 LEFT JOIN routes r ON r.id = sv.route_id
+                 LEFT JOIN referencia ref ON ref.store_id = sv.store_id
+                 WHERE st.company_id = :cid
+                   AND sv.status = 'pending'
+                   AND (sv.date AT TIME ZONE :tz)::date BETWEEN :from AND :to
+                   ${userFilter}
+                 ORDER BY ref.promedio DESC NULLS LAST, sv.date DESC
+                 LIMIT 500`,
+                { type: QueryTypes.SELECT, replacements: repl }
+            );
+
+            return res.status(200).json({
+                success: true,
+                data: {
+                    range: { from, to },
+                    user_id: userId,
+                    resumen,
+                    por_vendedor: porVendedor,
+                    por_motivo: porMotivo,
+                    detalle_no_visitadas: detalleNoVisitadas,
+                    detalle_truncado: detalleNoVisitadas.length >= 500,
+                },
+            });
+        } catch (error) {
+            console.error('Error en getLostOpportunity:', error);
+            return res.status(500).json({ success: false, message: 'Error al obtener la oportunidad perdida' });
         }
     },
 };

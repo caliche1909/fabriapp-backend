@@ -100,22 +100,17 @@ router.delete('/:roleId',
 
 
 
-/**********************************************RUTAS QUE NO SE ESTAN USANDO AUN *****************************************************/
-
-
-
-/**
- * @route GET /api/roles/global
- * @desc Obtener todos los roles globales del sistema
- * @access Private
- */
-router.get('/global', rolesController.getGlobalRoles);
-
 /**
  * @route GET /api/roles/company/:companyId/for-user-creation
- * @desc Obtener roles para creación de usuarios (excluye SUPER_ADMIN)
- * @access Private
+ * @desc Obtener roles para creación de usuarios (excluye SUPER_ADMIN).
+ *       La compañía se toma de la sesión (`req.user.companyId`); el `:companyId`
+ *       del path se ignora (se conserva por compatibilidad con el frontend).
+ * @access Private (requiere token)
  */
-router.get('/company/:companyId/for-user-creation', rolesController.getRolesForUserCreation);
+router.get('/company/:companyId/for-user-creation',
+    verifyToken,
+    rolesQueryLimiter,               // 50 consultas/15min (se cachea en Redux)
+    rolesController.getRolesForUserCreation
+);
 
 module.exports = router; 

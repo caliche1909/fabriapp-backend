@@ -31,12 +31,13 @@ const switchDefaultCompanyLimiter = createSmartRateLimit({
 
 // api/company/
 
-// 🔄 CAMBIAR EMPRESA POR DEFECTO - Límite específico (30/15min)
-// Operación de actualización con límite personalizado
+// 🔄 ESTABLECER MI COMPAÑÍA POR DEFECTO (auto-set) — acción PERSONAL del usuario.
+// Sin checkPermission: elegir cuál de MIS compañías es la predeterminada no es gestión de
+// settings de la empresa. La autorización real la da la validación de MEMBRESÍA en el
+// controlador (403 si no perteneces). Consistente con /switch-default.
 router.put('/update_is_default_true/:id',
     verifyToken,                     // Verificar autenticación
     changeDefaultCompanyLimiter,     // Rate limiting específico (30 peticiones/15min por usuario)
-    checkPermission('update_company_settings'), // Verificar permisos
     companyController.updateIsDefaultTrue
 );
 

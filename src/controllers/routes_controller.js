@@ -1,6 +1,192 @@
 const { routes, users, user_companies, roles, stores, route_types, store_visits } = require('../models');
 const { parseWindows, classify, formatMinutes, optimizeOpenStores } = require('../utils/routeOptimization');
 const { Op } = require('sequelize');
+const { construirParada } = require('../utils/storeVisits');
+
+/**
+ * 📅 Horizonte máximo de planificación de rutas, en días.
+ * Se puede iniciar una ruta para HOY o para cualquier día dentro de este horizonte
+ * (planificar por adelantado). Nunca hacia el pasado. El mismo valor lo publica
+ * `getRouteDayVisits` como `max_planificacion`, para que el calendario del frontend
+ * no pueda ofrecer una fecha que el backend rechazaría.
+ */
+const MAX_DIAS_PLANIFICACION = 30;
+
+/**
+ * Valida que una cadena sea una fecha real en formato YYYY-MM-DD.
+ * El formato solo no basta: '2026-02-31' pasa el regex pero al castear a `date`
+ * PostgreSQL lanza un error que se vería como un 500.
+ */
+const esFechaValida = (texto) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(texto)) return false;
+    const [anio, mes, dia] = texto.split('-').map(Number);
+    const prueba = new Date(Date.UTC(anio, mes - 1, dia));
+    return prueba.getUTCFullYear() === anio
+        && prueba.getUTCMonth() === mes - 1
+        && prueba.getUTCDate() === dia;
+};
+
+/**
+ * 🔐 ¿Puede este usuario tocar las paradas de una jornada ajena?
+ *
+ * Misma regla que gobierna "iniciar ruta", reutilizada a propósito para no inventar un
+ * permiso nuevo: el owner, el dueño de la propia jornada, o quien tenga
+ * `start_route_for_others` (que es exactamente el permiso de "preparar la lista de otro
+ * vendedor"). ADMIN y VENTAS ya lo tienen; el vendedor que agrega tiendas a su propia ruta
+ * entra por la rama de "es mi jornada".
+ *
+ * ⚠️ NO se revalida el día hábil: la jornada YA existe, así que esa validación ya ocurrió
+ * al iniciarla (o el owner la saltó a propósito para una jornada extraordinaria). Volver a
+ * exigirla haría imposible ajustar justo esos casos.
+ */
+const puedeAjustarJornada = (req, jornadaUserId) => {
+    if (req.user?.userType === 'owner') return true;
+    if (jornadaUserId === req.user?.id) return true;
+    return Array.isArray(req.user?.permissions) && req.user.permissions.includes('start_route_for_others');
+};
+
+/**
+ * 🧮 Calcula la desincronización entre la ruta y cada una de sus jornadas ABIERTAS
+ * (desde HOY hasta HOY + MAX_DIAS_PLANIFICACION). Los días pasados no se tocan: el
+ * histórico está cerrado.
+ *
+ * Devuelve un arreglo de jornadas; cada una con sus `faltantes`, `sobrantes` y `bloqueadas`.
+ * Es pura lectura, y la comparten el diagnóstico (GET) y la aplicación (POST) para que el
+ * ajuste se aplique exactamente sobre lo que el usuario vio.
+ *
+ * 🔑 Una jornada se identifica por **DÍA**, no por (día, persona).
+ *
+ * Agrupar por persona era correcto cuando la lista era de alguien, pero tras un **relevo** las
+ * paradas de un mismo día quedan repartidas entre el vendedor anterior (las que resolvió) y el
+ * nuevo (las pendientes que se le traspasaron). Agrupando por persona, el mismo día salía DOS
+ * veces y **cada tienda aparecía como "faltante" para el bloque de quien no la tenía**: con 47
+ * tiendas, el botón mostraba 47 ajustes fantasma y no había forma de resolverlos (el UNIQUE
+ * `(store_id, route_id, visit_day)` impide crearlas, así que aplicar no cambiaba nada).
+ *
+ * El responsable de la jornada es el **encargado ACTUAL de la ruta** (`routes.user_id`): es quien
+ * debe hacer lo que falta, y a su nombre nacen las paradas nuevas — coherente con el traspaso de
+ * pendientes que hace `updateRoute`. Si la ruta no tiene encargado (dato viejo), se cae al usuario
+ * con más paradas ese día para que el diagnóstico siga siendo utilizable.
+ */
+const construirDiagnosticoDeAjuste = async ({ rid, companyId, tz, transaction = null }) => {
+    const opciones = { type: routes.sequelize.QueryTypes.SELECT, transaction };
+    const reemplazos = { rid, company: companyId, tz, horizonte: MAX_DIAS_PLANIFICACION };
+
+    // Jornadas abiertas + `fecha_marca` de cada una (now() si es hoy; medianoche en la zona
+    // de la compañía si es futura), con la MISMA regla que usa `startRoute`.
+    const jornadas = await routes.sequelize.query(
+        `WITH ref AS (SELECT (now() AT TIME ZONE :tz)::date AS hoy),
+              dias AS (
+                  SELECT sv.visit_day,
+                         -- Respaldo por si la ruta se quedó sin encargado: quien más paradas tiene.
+                         mode() WITHIN GROUP (ORDER BY sv.user_id) AS user_frecuente
+                    FROM store_visits sv, ref
+                   WHERE sv.route_id = :rid
+                     AND sv.visit_day >= ref.hoy
+                     AND sv.visit_day <= ref.hoy + CAST(:horizonte AS integer)
+                   GROUP BY sv.visit_day
+              )
+         SELECT to_char(d.visit_day, 'YYYY-MM-DD') AS visit_day,
+                (d.visit_day = ref.hoy) AS es_hoy,
+                CASE WHEN d.visit_day = ref.hoy THEN now()
+                     ELSE CAST(d.visit_day AS timestamp) AT TIME ZONE :tz END AS fecha_marca,
+                COALESCE(r.user_id, d.user_frecuente) AS user_id,
+                NULLIF(TRIM(COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '')), '') AS user_name
+           FROM dias d
+           CROSS JOIN ref
+           JOIN routes r ON r.id = :rid
+           LEFT JOIN users u ON u.id = COALESCE(r.user_id, d.user_frecuente)
+          ORDER BY d.visit_day ASC`,
+        { ...opciones, replacements: reemplazos }
+    );
+
+    if (jornadas.length === 0) return [];
+
+    // FALTANTES: tiendas VIVAS vinculadas a la ruta que no tienen parada ese día.
+    // `s.deleted_at IS NULL` es clave: `deleteStore` hace soft delete y NO limpia
+    // `routes_stores`, así que una tienda eliminada sigue figurando como miembro. Crearle
+    // una parada sería resucitarla dentro de la jornada.
+    const faltantes = await routes.sequelize.query(
+        `WITH ref AS (SELECT (now() AT TIME ZONE :tz)::date AS hoy),
+              dias AS (
+                  SELECT DISTINCT sv.visit_day
+                    FROM store_visits sv, ref
+                   WHERE sv.route_id = :rid
+                     AND sv.visit_day >= ref.hoy
+                     AND sv.visit_day <= ref.hoy + CAST(:horizonte AS integer)
+              )
+         SELECT to_char(d.visit_day, 'YYYY-MM-DD') AS visit_day,
+                s.id AS store_id, s.name AS store_name, s.address AS store_address
+           FROM dias d
+           JOIN routes_stores rs ON rs.route_id = :rid AND rs.company_id = :company
+           JOIN stores s ON s.id = rs.store_id AND s.deleted_at IS NULL
+          WHERE NOT EXISTS (
+                    -- Sin filtro por usuario: la parada existe o no existe, da igual a nombre
+                    -- de quién quedó. Con el filtro por persona, tras un relevo TODA tienda
+                    -- de la ruta parecía faltar.
+                    SELECT 1 FROM store_visits v
+                     WHERE v.route_id = :rid AND v.store_id = s.id
+                       AND v.visit_day = d.visit_day)
+          ORDER BY d.visit_day ASC, s.name ASC`,
+        { ...opciones, replacements: reemplazos }
+    );
+
+    // HUÉRFANAS: paradas de la jornada cuya tienda ya no pertenece a la ruta, o fue
+    // eliminada. Las 'pending' son accionables (`sobrantes`); las que ya avanzaron a
+    // 'visited'/'completed' NO se tocan jamás (`bloqueadas`): pueden tener una venta o un
+    // reporte de no-venta enganchado, y `sales.visit_id` está en ON DELETE SET NULL, así
+    // que borrarlas desengancharía la venta en silencio en vez de fallar.
+    const huerfanas = await routes.sequelize.query(
+        `WITH ref AS (SELECT (now() AT TIME ZONE :tz)::date AS hoy)
+         SELECT to_char(sv.visit_day, 'YYYY-MM-DD') AS visit_day,
+                sv.id AS visit_id, sv.store_id, sv.store_name, sv.status,
+                (s.id IS NULL OR s.deleted_at IS NOT NULL) AS tienda_eliminada
+           FROM store_visits sv
+           LEFT JOIN stores s ON s.id = sv.store_id
+           CROSS JOIN ref
+          WHERE sv.route_id = :rid
+            AND sv.visit_day >= ref.hoy
+            AND sv.visit_day <= ref.hoy + CAST(:horizonte AS integer)
+            AND (s.id IS NULL
+                 OR s.deleted_at IS NOT NULL
+                 OR NOT EXISTS (SELECT 1 FROM routes_stores rs
+                                 WHERE rs.route_id = sv.route_id AND rs.store_id = sv.store_id))
+          ORDER BY sv.visit_day ASC, sv.store_name ASC`,
+        { ...opciones, replacements: reemplazos }
+    );
+
+    return jornadas.map((j) => {
+        const suyas = huerfanas.filter((h) => h.visit_day === j.visit_day);
+
+        return {
+            visit_day: j.visit_day,
+            es_hoy: j.es_hoy === true,
+            fecha_marca: j.fecha_marca,
+            responsable: { user_id: j.user_id, user_name: j.user_name },
+            faltantes: faltantes
+                .filter((f) => f.visit_day === j.visit_day)
+                .map((f) => ({ store_id: f.store_id, store_name: f.store_name, store_address: f.store_address })),
+            sobrantes: suyas
+                .filter((h) => h.status === 'pending')
+                .map((h) => ({
+                    visit_id: h.visit_id,
+                    store_id: h.store_id,
+                    store_name: h.store_name,
+                    status: h.status,
+                    tienda_eliminada: h.tienda_eliminada === true,
+                })),
+            bloqueadas: suyas
+                .filter((h) => h.status !== 'pending')
+                .map((h) => ({
+                    visit_id: h.visit_id,
+                    store_id: h.store_id,
+                    store_name: h.store_name,
+                    status: h.status,
+                    tienda_eliminada: h.tienda_eliminada === true,
+                })),
+        };
+    });
+};
 
 // 🎯 Función helper para formatear datos del vendedor de forma consistente
 const formatSellerData = (seller, assignment) => {
@@ -123,7 +309,8 @@ module.exports = {
     async getListRoutes(req, res) {
 
         try {
-            const { company_id } = req.params;
+            // 🔒 Compañía SIEMPRE desde la sesión (no del path) → cierra IDOR multi-tenant.
+            const company_id = req.user.companyId;
             const { permission_type } = req.query;
 
 
@@ -580,13 +767,71 @@ module.exports = {
                 }
             }
 
-            // 🔹 Actualizar los campos
-            route.name = normalizedName || route.name;
-            route.user_id = user_id !== undefined ? user_id : route.user_id;
-            route.working_days = working_days || route.working_days;
-            route.route_type_id = route_type_id !== undefined ? route_type_id : route.route_type_id;
+            // 🔄 RELEVO A MEDIA JORNADA. Se captura el encargado ANTERIOR antes de pisarlo:
+            // si cambia, las paradas PENDIENTES de las jornadas ABIERTAS (hoy en adelante) pasan
+            // al nuevo, y las ya resueltas se quedan con quien las resolvió.
+            //
+            // 🧠 Sin esto el modelo queda a medias: el nuevo encargado ya puede operar la ruta
+            // (paso 1-3), pero lo que falta por hacer seguiría figurando a nombre del anterior, y
+            // el reporte de **oportunidad perdida** —que cuenta las `pending` por `sv.user_id`—
+            // le cargaría a él las tiendas que no alcanzó a visitar el que lo relevó.
+            //
+            // Los días PASADOS no se tocan nunca: son historia cerrada.
+            const encargadoAnterior = route.user_id;
+            const hayCambioDeEncargado = user_id !== undefined && user_id !== encargadoAnterior;
 
-            await route.save();
+            const tx = await routes.sequelize.transaction();
+            let paradasTraspasadas = 0;
+            let pendientesHuerfanas = 0;
+
+            try {
+                // 🔹 Actualizar los campos
+                route.name = normalizedName || route.name;
+                route.user_id = user_id !== undefined ? user_id : route.user_id;
+                route.working_days = working_days || route.working_days;
+                route.route_type_id = route_type_id !== undefined ? route_type_id : route.route_type_id;
+
+                await route.save({ transaction: tx });
+
+                if (hayCambioDeEncargado && user_id) {
+                    const nuevo = await users.findByPk(user_id, { attributes: ['first_name', 'last_name'], transaction: tx });
+                    const nombreNuevo = nuevo ? `${nuevo.first_name} ${nuevo.last_name}`.trim() : null;
+                    const tz = req.user?.companyTimezone || 'America/Bogota';
+
+                    // No hace falta ningún guardia anti-colisión: desde la migración
+                    // 20260818120000 el UNIQUE es `(store_id, route_id, visit_day)`, así que no
+                    // pueden existir dos paradas de la misma tienda y día para cambiarles el dueño.
+                    const [, meta] = await routes.sequelize.query(
+                        `UPDATE store_visits sv
+                            SET user_id = CAST(:nuevo AS uuid), user_name = :nombre, updated_at = now()
+                          WHERE sv.route_id = :rid
+                            AND sv.status = 'pending'
+                            AND sv.visit_day >= (now() AT TIME ZONE :tz)::date
+                            AND sv.user_id <> CAST(:nuevo AS uuid)`,
+                        { replacements: { rid: route.id, nuevo: user_id, nombre: nombreNuevo, tz }, transaction: tx }
+                    );
+                    paradasTraspasadas = meta && typeof meta.rowCount === 'number' ? meta.rowCount : 0;
+                }
+
+                // Quitarle el encargado a una ruta con jornada abierta deja paradas que NADIE puede
+                // atender (marcar/vender exigen ser el encargado). No se bloquea —desasignar puede
+                // ser deliberado— pero se avisa en la respuesta.
+                if (hayCambioDeEncargado && !user_id) {
+                    const tz = req.user?.companyTimezone || 'America/Bogota';
+                    const [{ n }] = await routes.sequelize.query(
+                        `SELECT count(*)::int AS n FROM store_visits
+                          WHERE route_id = :rid AND status = 'pending'
+                            AND visit_day >= (now() AT TIME ZONE :tz)::date`,
+                        { type: routes.sequelize.QueryTypes.SELECT, replacements: { rid: route.id, tz }, transaction: tx }
+                    );
+                    pendientesHuerfanas = n;
+                }
+
+                await tx.commit();
+            } catch (e) {
+                await tx.rollback();
+                throw e;
+            }
 
             // 🔹 Recargar la ruta con el route_type incluido
             await route.reload({
@@ -619,11 +864,23 @@ module.exports = {
                 // ✅ NO incluimos stores
             };
 
+            // Mensaje: lo que pasó con la jornada en curso no puede quedar en silencio.
+            let message = "Ruta actualizada exitosamente";
+            if (paradasTraspasadas > 0) {
+                message += `. Se traspasaron ${paradasTraspasadas} visita${paradasTraspasadas === 1 ? '' : 's'} pendiente${paradasTraspasadas === 1 ? '' : 's'} al nuevo encargado`;
+            } else if (pendientesHuerfanas > 0) {
+                message += `. ⚠️ La ruta quedó SIN encargado y tiene ${pendientesHuerfanas} visita${pendientesHuerfanas === 1 ? '' : 's'} pendiente${pendientesHuerfanas === 1 ? '' : 's'} que nadie podrá atender`;
+            }
+
             res.status(200).json({
                 success: true,
                 status: 200,
-                message: "Ruta actualizada exitosamente",
-                route: formattedRoute
+                message,
+                route: formattedRoute,
+                // Detalle del relevo, por si el cliente quiere mostrarlo aparte del mensaje.
+                relevo: hayCambioDeEncargado
+                    ? { hubo_cambio: true, visitas_traspasadas: paradasTraspasadas, pendientes_sin_encargado: pendientesHuerfanas }
+                    : { hubo_cambio: false, visitas_traspasadas: 0, pendientes_sin_encargado: 0 },
             });
 
         } catch (error) {
@@ -637,13 +894,24 @@ module.exports = {
     },
 
     /**
-     * 🚀 INICIAR RUTA — Reemplaza a "reiniciar ruta".
-     * Crea las visitas del DÍA (estado 'pending') para todas las tiendas de la ruta
-     * (vía routes_stores). Idempotente: el UNIQUE (store_id, route_id, user_id,
-     * visit_day) evita duplicados, así que iniciar dos veces no reinicia el progreso.
+     * 🚀 INICIAR / PROGRAMAR RUTA — Reemplaza a "reiniciar ruta".
+     * Crea las visitas (estado 'pending') para todas las tiendas de la ruta (vía
+     * routes_stores) a nombre del usuario elegido y para el DÍA elegido. Idempotente:
+     * el UNIQUE (store_id, route_id, user_id, visit_day) evita duplicados, así que
+     * iniciar dos veces no reinicia el progreso.
      *
-     * Reglas (D1): solo el vendedor asignado (routes.user_id) puede iniciarla y solo
-     * en un día hábil (working_days). Un OWNER puede iniciarla sin esas restricciones.
+     * 📅 Fecha: `body.visit_day` (YYYY-MM-DD). Por defecto HOY. Se admite **hacia
+     * adelante** hasta `MAX_DIAS_PLANIFICACION` para poder dejar la ruta programada
+     * (ej.: el owner arma hoy la lista de mañana para un vendedor; mañana ese vendedor
+     * no crea nada, se le devuelve la lista ya existente). Hacia atrás se rechaza:
+     * no tiene sentido "planificar" el pasado.
+     *
+     * 👤 La jornada es SIEMPRE del vendedor asignado (`routes.user_id`): no se elige
+     * destinatario. Quién puede pulsar iniciar:
+     *   - El vendedor asignado, si el día elegido es hábil para la ruta.
+     *   - El OWNER: cualquier ruta y cualquier día (única vía para una jornada extraordinaria).
+     *   - Con `start_route_for_others`: la ruta de otro vendedor, pero solo en día hábil.
+     *   - Ruta sin vendedor asignado: nadie.
      */
     async startRoute(req, res) {
         const transaction = await routes.sequelize.transaction();
@@ -665,52 +933,104 @@ module.exports = {
                 return res.status(404).json({ success: false, status: 404, message: 'La ruta no existe o no pertenece a su compañía.' });
             }
 
-            // 🔐 ¿Quién resuelve estas visitas? Se crean a nombre de `effectiveUserId`.
-            // Regla de negocio:
-            //   - El que inicia para OTRO usuario debe ser owner o tener el permiso
-            //     `start_route_for_others` (el frontend manda `target_user_id`).
-            //   - Iniciar para uno mismo sin ese privilegio exige ser el vendedor
-            //     asignado a la ruta y estar en un día hábil.
-            const canStartForOthers = isOwner || (Array.isArray(req.user?.permissions) && req.user.permissions.includes('start_route_for_others'));
-            const targetUserId = req.body?.target_user_id ? String(req.body.target_user_id) : null;
-            const startingForOther = targetUserId && targetUserId !== req.user.id;
-
-            let effectiveUserId;
-            if (startingForOther) {
-                if (!canStartForOthers) {
-                    await transaction.rollback();
-                    return res.status(403).json({ success: false, status: 403, message: 'No tiene permiso para iniciar rutas a nombre de otro usuario.' });
-                }
-                // El destino debe ser un miembro ACTIVO de la compañía.
-                const member = await user_companies.findOne({
-                    where: { user_id: targetUserId, company_id: companyId, status: 'active' },
-                    transaction,
+            // 🔐 ¿A nombre de quién se crean las visitas? SIEMPRE del vendedor asignado a la
+            // ruta (`routes.user_id`). No se elige destinatario: eso elimina de raíz la
+            // ambigüedad de "¿de quién es esta lista?" y hace que la ruta y su responsable
+            // sean una sola cosa.
+            //
+            // Quién puede pulsar iniciar:
+            //   - El vendedor asignado, en un día hábil de la ruta.
+            //   - El OWNER, cualquier ruta y cualquier día (preparar la jornada por adelantado).
+            //   - Quien tenga `start_route_for_others`: puede preparar la ruta de OTRO vendedor,
+            //     pero la lista se sigue creando a nombre del asignado, no del suyo.
+            const effectiveUserId = route.user_id;
+            if (!effectiveUserId) {
+                await transaction.rollback();
+                return res.status(400).json({
+                    success: false, status: 400,
+                    message: 'Esta ruta no tiene un vendedor asignado. Asígnale uno antes de iniciarla.',
                 });
-                if (!member) {
-                    await transaction.rollback();
-                    return res.status(400).json({ success: false, status: 400, message: 'El usuario seleccionado no pertenece a la empresa o no está activo.' });
-                }
-                effectiveUserId = targetUserId;
-            } else {
-                effectiveUserId = req.user.id;
             }
 
-            // Día hábil + fecha del negocio (TZ America/Bogota).
-            const [{ hoy, weekday }] = await routes.sequelize.query(
-                `SELECT (now() AT TIME ZONE 'America/Bogota')::date AS hoy,
-                        CASE trim(to_char(now() AT TIME ZONE 'America/Bogota','ID'))
+            const canStartForOthers = isOwner || (Array.isArray(req.user?.permissions) && req.user.permissions.includes('start_route_for_others'));
+            const esMiRuta = effectiveUserId === req.user.id;
+            if (!esMiRuta && !canStartForOthers) {
+                await transaction.rollback();
+                return res.status(403).json({ success: false, status: 403, message: 'Solo el vendedor asignado puede iniciar esta ruta.' });
+            }
+
+            // El vendedor asignado debe seguir siendo miembro ACTIVO de la compañía: si se
+            // desactivó, crear una jornada a su nombre dejaría paradas que nadie puede resolver.
+            const member = await user_companies.findOne({
+                where: { user_id: effectiveUserId, company_id: companyId, status: 'active' },
+                transaction,
+            });
+            if (!member) {
+                await transaction.rollback();
+                return res.status(400).json({
+                    success: false, status: 400,
+                    message: 'El vendedor asignado a esta ruta ya no pertenece a la empresa o está inactivo.',
+                });
+            }
+
+            // 📅 Día objetivo. Por defecto HOY; se acepta una fecha futura para dejar la
+            // ruta programada. El formato se valida antes de tocar la BD porque una fecha
+            // inexistente ('2026-02-31') pasa el regex pero revienta al castear a `date`.
+            const diaSolicitado = req.body?.visit_day ? String(req.body.visit_day) : null;
+            if (diaSolicitado && !esFechaValida(diaSolicitado)) {
+                await transaction.rollback();
+                return res.status(400).json({ success: false, status: 400, message: 'Fecha inválida (formato esperado YYYY-MM-DD).' });
+            }
+
+            // Fecha del negocio (zona horaria de la compañía, Capa B) + día de la semana
+            // DEL DÍA OBJETIVO (no del de hoy: si se programa el viernes, lo que importa
+            // es que el viernes sea hábil).
+            //
+            // `fecha_marca` es lo que se guarda en `store_visits.date`:
+            //   - si el día objetivo es HOY → `now()` (comportamiento de siempre);
+            //   - si es futuro → medianoche de ese día en la zona de la compañía.
+            // ⚠️ Esto NO es cosmético: los reportes filtran por `(date AT TIME ZONE tz)::date`
+            // y cuentan las paradas 'pending' como "no visitadas". Estampar `now()` en una
+            // lista programada para mañana la haría aparecer HOY como oportunidad perdida.
+            const tz = req.user?.companyTimezone || 'America/Bogota';
+            const [{ dia, weekday, fecha_marca, dias_desde_hoy }] = await routes.sequelize.query(
+                `WITH ref AS (
+                     SELECT (now() AT TIME ZONE :tz)::date AS hoy,
+                            COALESCE(CAST(:dia AS date), (now() AT TIME ZONE :tz)::date) AS dia
+                 )
+                 SELECT to_char(hoy, 'YYYY-MM-DD') AS hoy,
+                        to_char(dia, 'YYYY-MM-DD') AS dia,
+                        (dia - hoy) AS dias_desde_hoy,
+                        CASE trim(to_char(dia,'ID'))
                             WHEN '1' THEN 'lunes' WHEN '2' THEN 'martes' WHEN '3' THEN 'miercoles'
                             WHEN '4' THEN 'jueves' WHEN '5' THEN 'viernes' WHEN '6' THEN 'sabado'
-                            WHEN '7' THEN 'domingo' END AS weekday`,
-                { type: routes.sequelize.QueryTypes.SELECT, transaction }
+                            WHEN '7' THEN 'domingo' END AS weekday,
+                        CASE WHEN dia = hoy THEN now()
+                             ELSE CAST(dia AS timestamp) AT TIME ZONE :tz END AS fecha_marca
+                 FROM ref`,
+                { type: routes.sequelize.QueryTypes.SELECT, replacements: { tz, dia: diaSolicitado }, transaction }
             );
 
-            // 🔁 Idempotencia explícita: si ESTE usuario ya tiene visitas para esta ruta hoy,
-            // se devuelve lo que ya existe y NO se crea una segunda lista de pendientes.
-            // Aplica igual si inicia para sí mismo o si un privilegiado inicia para otro:
-            // (ruta + usuario efectivo + día) ya presente ⇒ no se duplica.
+            const desfase = Number(dias_desde_hoy);
+            if (desfase < 0) {
+                await transaction.rollback();
+                return res.status(400).json({ success: false, status: 400, message: 'No se puede iniciar una ruta en una fecha pasada.' });
+            }
+            if (desfase > MAX_DIAS_PLANIFICACION) {
+                await transaction.rollback();
+                return res.status(400).json({ success: false, status: 400, message: `Solo se puede programar hasta ${MAX_DIAS_PLANIFICACION} días por adelantado.` });
+            }
+            const esHoy = desfase === 0;
+
+            // 🔁 Idempotencia explícita: si el vendedor asignado ya tiene visitas de esta ruta
+            // ese día, se devuelve lo que ya existe y NO se crea una segunda lista de
+            // pendientes. Es lo que permite programar hoy la ruta de mañana: mañana el vendedor
+            // pulsa "iniciar" y recibe su jornada tal cual quedó.
+            // La jornada es de la RUTA, no de una persona: basta con que EXISTA para ese día.
+            // Antes se contaba solo la del vendedor asignado, así que tras un relevo el nuevo
+            // encargado no la "veía" y caía en el 409 de más abajo.
             const yaIniciada = await store_visits.count({
-                where: { route_id: rid, user_id: effectiveUserId, visit_day: hoy },
+                where: { route_id: rid, visit_day: dia },
                 transaction,
             });
             if (yaIniciada > 0) {
@@ -723,43 +1043,31 @@ module.exports = {
                     success: true,
                     status: 200,
                     already_started: true,
-                    message: 'Esta ruta ya estaba iniciada hoy para este usuario. Se devuelven las visitas existentes.',
+                    message: esHoy
+                        ? 'Esta ruta ya estaba iniciada hoy. Se devuelven las visitas existentes.'
+                        : `Esta ruta ya estaba programada para el ${dia}. Se devuelven las visitas existentes.`,
                     route_id: rid,
-                    visit_day: hoy,
+                    visit_day: dia,
                     tiendas_en_ruta: tiendasEnRuta,
                     visitas_del_dia: yaIniciada,
                 });
             }
 
-            // 🚫 Un responsable por día: si la ruta ya fue iniciada hoy por OTRO usuario,
-            // no se permite crear una segunda lista (evita dos vendedores sobre las mismas
-            // tiendas). Para otro comportamiento, se debe crear una ruta aparte.
-            const otraLista = await store_visits.findOne({
-                where: { route_id: rid, visit_day: hoy, user_id: { [Op.ne]: effectiveUserId } },
-                attributes: ['user_id', 'user_name'],
-                transaction,
-            });
-            if (otraLista) {
-                await transaction.rollback();
-                const quien = otraLista.user_name || 'otro usuario';
-                return res.status(409).json({
-                    success: false,
-                    status: 409,
-                    message: `Esta ruta ya fue iniciada hoy por ${quien}. Una ruta solo puede tener un responsable por día; si necesitas otro comportamiento, crea una ruta aparte.`,
-                });
-            }
+            // 🚫 Ya no hace falta el chequeo de "otra lista del mismo día": una jornada por ruta
+            // y día es ahora un invariante del MODELO (arriba se sale si ya existe, sin mirar de
+            // quién es). Antes esto devolvía un 409 al nuevo encargado tras un relevo — le decía
+            // que la ruta era de otro justo cuando acababa de recibirla.
 
-            // Ruta propia sin privilegio: exige ser el vendedor asignado y día hábil.
-            // Los privilegiados (owner o con permiso) se saltan ambas reglas.
-            if (!canStartForOthers) {
-                if (!route.user_id || route.user_id !== req.user.id) {
-                    await transaction.rollback();
-                    return res.status(403).json({ success: false, status: 403, message: 'Solo el vendedor asignado puede iniciar esta ruta.' });
-                }
+            // 📆 El día objetivo debe ser hábil para la ruta. Solo el OWNER se salta esta regla
+            // (es la vía de escape para una jornada extraordinaria). `start_route_for_others`
+            // NO la salta: ese permiso habilita preparar la ruta de otro vendedor, no cambiar
+            // los días en que la ruta opera.
+            if (!isOwner) {
                 const workingDays = route.working_days || [];
                 if (!workingDays.includes(weekday)) {
                     await transaction.rollback();
-                    return res.status(400).json({ success: false, status: 400, message: `Hoy (${weekday}) no es un día hábil de esta ruta.` });
+                    const cuando = esHoy ? `Hoy (${weekday})` : `El ${dia} (${weekday})`;
+                    return res.status(400).json({ success: false, status: 400, message: `${cuando} no es un día hábil de esta ruta.` });
                 }
             }
 
@@ -787,34 +1095,30 @@ module.exports = {
 
             // Crear las paradas del día en 'pending'. ignoreDuplicates → ON CONFLICT
             // DO NOTHING contra el UNIQUE diario (idempotente, no reinicia progreso).
-            const rows = memberStores.map((s) => ({
-                user_id: effectiveUserId,
-                store_id: s.id,
-                route_id: rid,
-                visit_day: hoy,
-                status: 'pending',
-                distance: null,
-                arrived_at: null,
-                user_name: solverName,
-                store_name: s.name,
-                store_address: s.address,
-                route_name: route.name,
-                sale_amount: 0.00,
-                date: new Date(),
+            const rows = memberStores.map((s) => construirParada({
+                store: s,
+                route,
+                userId: effectiveUserId,
+                userName: solverName,
+                visitDay: dia,
+                fechaMarca: fecha_marca,
             }));
             await store_visits.bulkCreate(rows, { ignoreDuplicates: true, transaction });
 
             // Conteo real del día tras la creación idempotente.
-            const totalDia = await store_visits.count({ where: { route_id: rid, user_id: effectiveUserId, visit_day: hoy }, transaction });
+            const totalDia = await store_visits.count({ where: { route_id: rid, visit_day: dia }, transaction });
 
             await transaction.commit();
 
             return res.status(200).json({
                 success: true,
                 status: 200,
-                message: 'Ruta iniciada. Se generaron las visitas del día.',
+                message: esHoy
+                    ? 'Ruta iniciada. Se generaron las visitas del día.'
+                    : `Ruta programada para el ${dia}. Se generaron ${totalDia} visitas.`,
                 route_id: rid,
-                visit_day: hoy,
+                visit_day: dia,
+                is_today: esHoy,
                 tiendas_en_ruta: memberStores.length,
                 visitas_del_dia: totalDia,
             });
@@ -826,10 +1130,18 @@ module.exports = {
     },
 
     /**
-     * 📋 GET /api/routes/:route_id/visits/today
-     * Visitas del DÍA de una ruta (fuente del drawer de "Iniciar ruta").
-     * Devuelve cuántas tiendas tiene la ruta, si ya se inició (hay visitas hoy),
-     * el resumen por estado y la lista de visitas (con las paradas pendientes).
+     * 📋 GET /api/routes/:route_id/visits/today?date=YYYY-MM-DD
+     * Visitas de un DÍA de una ruta (fuente del drawer de "Iniciar ruta").
+     * Devuelve cuántas tiendas tiene la ruta, si ya está iniciada ese día, el resumen por
+     * estado, la lista ordenada y quién es el responsable.
+     *
+     * 👤 La lista se identifica por **ruta + día**, no por usuario: una ruta tiene un solo
+     * responsable por día. Así se sigue viendo el histórico aunque la ruta se reasigne a otro
+     * vendedor (las listas viejas pertenecen a quien la llevaba entonces).
+     *
+     * Si la jornada es de otra persona, hace falta ser owner o tener `view_routes_by_company`
+     * —el permiso de "ver todas las rutas de la empresa"— y **siempre en modo consulta**:
+     * marcar/optimizar/vender sigue exigiendo ser el dueño de la visita.
      */
     async getRouteDayVisits(req, res) {
         try {
@@ -841,42 +1153,108 @@ module.exports = {
                 return res.status(400).json({ success: false, status: 400, message: 'ID de ruta inválido.' });
             }
 
-            const route = await routes.findOne({ where: { id: rid, company_id: companyId }, attributes: ['id', 'name'] });
+            const route = await routes.findOne({ where: { id: rid, company_id: companyId }, attributes: ['id', 'name', 'user_id', 'working_days'] });
             if (!route) {
                 return res.status(404).json({ success: false, status: 404, message: 'La ruta no existe o no pertenece a su compañía.' });
             }
 
-            // Fecha objetivo: por defecto HOY (día hábil del negocio, TZ America/Bogota).
+            // Fecha objetivo: por defecto HOY (día hábil del negocio, zona horaria de la compañía).
             // El calendario puede pedir otra fecha vía ?date=YYYY-MM-DD (el pasado es solo lectura).
-            const [{ hoy, nowmin }] = await routes.sequelize.query(
-                `SELECT to_char((now() AT TIME ZONE 'America/Bogota')::date, 'YYYY-MM-DD') AS hoy,
-                        EXTRACT(HOUR FROM (now() AT TIME ZONE 'America/Bogota')) * 60
-                        + EXTRACT(MINUTE FROM (now() AT TIME ZONE 'America/Bogota')) AS nowmin`,
-                { type: routes.sequelize.QueryTypes.SELECT }
+            const tz = req.user?.companyTimezone || 'America/Bogota';
+            const [{ hoy, tope, nowmin }] = await routes.sequelize.query(
+                `SELECT to_char((now() AT TIME ZONE :tz)::date, 'YYYY-MM-DD') AS hoy,
+                        to_char((now() AT TIME ZONE :tz)::date + CAST(:horizonte AS integer), 'YYYY-MM-DD') AS tope,
+                        EXTRACT(HOUR FROM (now() AT TIME ZONE :tz)) * 60
+                        + EXTRACT(MINUTE FROM (now() AT TIME ZONE :tz)) AS nowmin`,
+                { type: routes.sequelize.QueryTypes.SELECT, replacements: { tz, horizonte: MAX_DIAS_PLANIFICACION } }
             );
             const nowMin = Number(nowmin);
             let targetDate = hoy;
             if (req.query.date) {
                 const d = String(req.query.date);
-                if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+                if (!esFechaValida(d)) {
                     return res.status(400).json({ success: false, status: 400, message: 'Fecha inválida (formato esperado YYYY-MM-DD).' });
                 }
                 targetDate = d;
             }
+            // Las tres fechas son 'YYYY-MM-DD', así que comparar como texto es correcto.
+            // Pasado → histórico (solo lectura); hoy → operable; futuro → programable.
             const isToday = targetDate === hoy;
+            const isFuture = targetDate > hoy;
+
+            // ¿La fecha elegida es un día hábil de la ruta? Se resuelve aquí (no en el cliente)
+            // para que el frontend no tenga que recalcular el día de la semana con la zona del
+            // dispositivo, que puede no ser la de la compañía.
+            const DIAS = ['lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado', 'domingo'];
+            const [{ isodow }] = await routes.sequelize.query(
+                `SELECT EXTRACT(ISODOW FROM CAST(:dia AS date))::int AS isodow`,
+                { type: routes.sequelize.QueryTypes.SELECT, replacements: { dia: targetDate } }
+            );
+            const esDiaHabil = (route.working_days || []).includes(DIAS[Number(isodow) - 1]);
 
             // Nº de tiendas de la ruta (vía routes_stores).
             const tiendasEnRuta = await routes.sequelize.models.routes_stores.count({ where: { route_id: rid, company_id: companyId } });
 
-            // Visitas de la fecha (paradas) DEL USUARIO que consulta: pendientes primero,
-            // luego por nombre. Cada quien ve solo la lista que él mismo inició (aislamiento
-            // por user_id; ni siquiera el owner ve la lista de otro por aquí).
+            // 👥 Responsable de la jornada: quién tiene visitas de ESTA ruta ese día (por regla
+            // de negocio hay uno solo; en datos antiguos podía haber dos, se devuelve el que más
+            // paradas tenga). Si aún no se ha iniciado, el responsable previsto es el vendedor
+            // asignado a la ruta. Se traen `first_name`/`last_name` POR SEPARADO a propósito: el
+            // nombre corto que muestra la UI ("Carlos Morán") no se puede derivar del
+            // `user_name` concatenado, porque no se sabe dónde termina el nombre.
+            const responsables = await routes.sequelize.query(
+                `SELECT sv.user_id, u.first_name, u.last_name, count(*)::int AS paradas
+                   FROM store_visits sv
+                   JOIN users u ON u.id = sv.user_id
+                  WHERE sv.route_id = :rid AND sv.visit_day = :dia
+                  GROUP BY 1, 2, 3
+                  ORDER BY paradas DESC`,
+                { type: routes.sequelize.QueryTypes.SELECT, replacements: { rid, dia: targetDate } }
+            );
+
+            // 👤 Quién sale como responsable:
+            //   - Día OPERABLE (hoy o futuro) → el **encargado ACTUAL** de la ruta (`routes.user_id`),
+            //     porque es quien debe terminarla, aunque parte de las paradas las haya resuelto el
+            //     anterior tras un relevo.
+            //   - Día PASADO → quien realmente la hizo (el de más paradas). El histórico no se reescribe
+            //     porque hoy la ruta esté asignada a otra persona.
+            const esPasado = targetDate < hoy;
+            let responsable = null;
+            if (esPasado) {
+                responsable = responsables[0] || null;
+            } else if (route.user_id) {
+                const [asignado] = await routes.sequelize.query(
+                    `SELECT id AS user_id, first_name, last_name,
+                            (SELECT count(*)::int FROM store_visits sv
+                              WHERE sv.route_id = :rid AND sv.visit_day = CAST(:dia AS date)) AS paradas
+                       FROM users WHERE id = :uid`,
+                    { type: routes.sequelize.QueryTypes.SELECT, replacements: { uid: route.user_id, rid, dia: targetDate } }
+                );
+                responsable = asignado || null;
+            }
+
+            // 🔐 Poder ACTUAR sobre la jornada = ser el encargado actual de la ruta. Consultar la de
+            // otro exige supervisar todas las rutas. Una ruta sin encargado no la puede operar nadie,
+            // pero tampoco tiene nada que esconder (no se puede iniciar), así que se deja consultar.
+            const targetUserId = route.user_id || req.user.id;
+            const esMiLista = !route.user_id || route.user_id === req.user.id;
+            if (!esMiLista) {
+                const puedeVerDeOtros = req.user?.userType === 'owner'
+                    || (Array.isArray(req.user?.permissions) && req.user.permissions.includes('view_routes_by_company'));
+                if (!puedeVerDeOtros) {
+                    return res.status(403).json({ success: false, status: 403, message: 'No tiene permiso para ver la ruta de otro vendedor.' });
+                }
+            }
+
+            // Visitas de la fecha (paradas) del responsable de la jornada.
             // Se une la tienda para traer sus horarios y clasificar cada parada PENDIENTE por
             // horario (abierta/abre_mas_tarde/cerrada) según la hora actual. Esto NO depende del
             // GPS (solo el ORDEN óptimo lo hace, y ese ya está en optimized_seq), así los chips
             // de horario aparecen SIEMPRE que sea hoy: al abrir y al reabrir el drawer.
+            // ⚠️ SIN filtro por `user_id`: la jornada es de la ruta. Tras un relevo sus paradas
+            // quedan repartidas entre el vendedor anterior y el nuevo, y filtrar por usuario
+            // escondería la mitad de la lista al que la está recorriendo.
             const visitas = await store_visits.findAll({
-                where: { route_id: rid, visit_day: targetDate, user_id: req.user.id },
+                where: { route_id: rid, visit_day: targetDate },
                 attributes: ['id', 'store_id', 'store_name', 'store_address', 'status', 'arrived_at', 'sale_amount', 'optimized_seq'],
                 include: [{ association: 'store', attributes: ['opening_time', 'closing_time'], required: false }],
                 order: [
@@ -892,6 +1270,41 @@ module.exports = {
             const resumen = { pending: 0, visited: 0, completed: 0, total: visitas.length };
             for (const v of visitas) { if (resumen[v.status] !== undefined) resumen[v.status] += 1; }
 
+            const lista = visitas.map((v) => {
+                // Estado por horario solo para pendientes de HOY (es time-dependent).
+                let estado = null;
+                let abre_a = null;
+                if (isToday && v.status === 'pending') {
+                    const c = classify(parseWindows(v['store.opening_time'], v['store.closing_time']), nowMin);
+                    estado = c.estado;
+                    if (c.estado === 'abre_mas_tarde') abre_a = formatMinutes(c.abreA);
+                }
+                return {
+                    visit_id: v.id,
+                    store_id: v.store_id,
+                    store_name: v.store_name,
+                    store_address: v.store_address,
+                    status: v.status,
+                    arrived_at: v.arrived_at,
+                    sale_amount: Number(v.sale_amount) || 0,
+                    optimized_seq: v.optimized_seq,
+                    estado,
+                    abre_a,
+                };
+            });
+
+            // 🔢 Orden final de la lista: pendientes ABIERTAS → pendientes que abren más tarde
+            // → pendientes CERRADAS → visitadas → completadas. El `sort` de JS es estable, así
+            // que dentro de cada grupo se conserva el orden que ya trajo el SQL (optimized_seq
+            // y luego nombre). En fechas que no son hoy `estado` es null y todas las pendientes
+            // quedan en el mismo grupo, conservando su orden.
+            const rangoHorario = { abierta: 0, abre_mas_tarde: 1, cerrada: 2 };
+            const rango = (v) => {
+                if (v.status === 'pending') return rangoHorario[v.estado] ?? 0;
+                return v.status === 'visited' ? 10 : 20;
+            };
+            lista.sort((a, b) => rango(a) - rango(b));
+
             return res.status(200).json({
                 success: true,
                 status: 200,
@@ -900,31 +1313,30 @@ module.exports = {
                 visit_day: targetDate,
                 today: hoy,
                 is_today: isToday,
+                is_future: isFuture,
+                // ¿La fecha elegida es día hábil de la ruta? Solo el owner puede iniciar fuera
+                // de los días hábiles; el frontend lo usa para avisar antes de pulsar.
+                es_dia_habil: esDiaHabil,
+                // Fecha máxima que el calendario puede ofrecer (hoy + horizonte de planificación).
+                max_planificacion: tope,
                 tiendas_en_ruta: tiendasEnRuta,
                 started: visitas.length > 0,
-                resumen,
-                visitas: visitas.map((v) => {
-                    // Estado por horario solo para pendientes de HOY (es time-dependent).
-                    let estado = null;
-                    let abre_a = null;
-                    if (isToday && v.status === 'pending') {
-                        const c = classify(parseWindows(v['store.opening_time'], v['store.closing_time']), nowMin);
-                        estado = c.estado;
-                        if (c.estado === 'abre_mas_tarde') abre_a = formatMinutes(c.abreA);
+                // De quién es la jornada y si es la del propio usuario (la única sobre la que
+                // puede actuar: marcar, optimizar, vender).
+                user_id: targetUserId,
+                es_mi_lista: esMiLista,
+                // Responsable: quien la lleva ese día si ya está iniciada; si no, el vendedor
+                // asignado a la ruta (a cuyo nombre se creará). null = ruta sin vendedor.
+                responsable: responsable
+                    ? {
+                        user_id: responsable.user_id,
+                        first_name: responsable.first_name,
+                        last_name: responsable.last_name,
+                        paradas: Number(responsable.paradas) || 0,
                     }
-                    return {
-                        visit_id: v.id,
-                        store_id: v.store_id,
-                        store_name: v.store_name,
-                        store_address: v.store_address,
-                        status: v.status,
-                        arrived_at: v.arrived_at,
-                        sale_amount: Number(v.sale_amount) || 0,
-                        optimized_seq: v.optimized_seq,
-                        estado,
-                        abre_a,
-                    };
-                }),
+                    : null,
+                resumen,
+                visitas: lista,
             });
         } catch (error) {
             console.error("❌ Error al obtener las visitas del día:", error);
@@ -955,17 +1367,33 @@ module.exports = {
                 return res.status(400).json({ success: false, status: 400, message: 'Se requiere tu ubicación (lat, lng).' });
             }
 
-            const route = await routes.findOne({ where: { id: rid, company_id: companyId }, attributes: ['id', 'name'] });
+            const route = await routes.findOne({ where: { id: rid, company_id: companyId }, attributes: ['id', 'name', 'user_id'] });
             if (!route) {
                 return res.status(404).json({ success: false, status: 404, message: 'La ruta no existe o no pertenece a su compañía.' });
             }
 
-            // Día hábil + minutos del momento actual (TZ America/Bogota).
+            // 🔐 Optimizar NO es solo leer: persiste `optimized_seq` en las paradas del día. Por eso
+            // exige ser el ENCARGADO ACTUAL, la misma regla que marcar, vender y reportar no-venta.
+            if (!route.user_id || route.user_id !== req.user.id) {
+                const encargado = route.user_id
+                    ? await users.findByPk(route.user_id, { attributes: ['first_name', 'last_name'] })
+                    : null;
+                return res.status(403).json({
+                    success: false,
+                    status: 403,
+                    message: encargado
+                        ? `Esta ruta está a cargo de ${`${encargado.first_name} ${encargado.last_name}`.trim()}. Solo su encargado actual puede optimizar el recorrido.`
+                        : 'Esta ruta no tiene un encargado asignado, así que nadie puede recorrerla.',
+                });
+            }
+
+            // Día hábil + minutos del momento actual (zona horaria de la compañía, Capa B).
+            const tz = req.user?.companyTimezone || 'America/Bogota';
             const [{ hoy, nowmin }] = await routes.sequelize.query(
-                `SELECT (now() AT TIME ZONE 'America/Bogota')::date AS hoy,
-                        EXTRACT(HOUR FROM (now() AT TIME ZONE 'America/Bogota')) * 60
-                        + EXTRACT(MINUTE FROM (now() AT TIME ZONE 'America/Bogota')) AS nowmin`,
-                { type: routes.sequelize.QueryTypes.SELECT }
+                `SELECT (now() AT TIME ZONE :tz)::date AS hoy,
+                        EXTRACT(HOUR FROM (now() AT TIME ZONE :tz)) * 60
+                        + EXTRACT(MINUTE FROM (now() AT TIME ZONE :tz)) AS nowmin`,
+                { type: routes.sequelize.QueryTypes.SELECT, replacements: { tz } }
             );
             const nowMin = Number(nowmin);
 
@@ -977,9 +1405,8 @@ module.exports = {
                         s.opening_time, s.closing_time
                  FROM store_visits sv
                  JOIN stores s ON s.id = sv.store_id
-                 WHERE sv.route_id = :rid AND sv.visit_day = :hoy AND sv.status = 'pending'
-                   AND sv.user_id = :uid`,
-                { replacements: { rid, hoy, uid: req.user.id }, type: routes.sequelize.QueryTypes.SELECT }
+                 WHERE sv.route_id = :rid AND sv.visit_day = :hoy AND sv.status = 'pending'`,
+                { replacements: { rid, hoy }, type: routes.sequelize.QueryTypes.SELECT }
             );
 
             // Clasificar por horario.
@@ -1021,7 +1448,7 @@ module.exports = {
                 // Limpiar orden de las que ya no son pendientes (visitadas/completadas).
                 await store_visits.update(
                     { optimized_seq: null },
-                    { where: { route_id: rid, visit_day: hoy, user_id: req.user.id, status: { [Op.ne]: 'pending' } }, transaction: tx }
+                    { where: { route_id: rid, visit_day: hoy, status: { [Op.ne]: 'pending' } }, transaction: tx }
                 );
                 // Numerar las pendientes en el orden calculado.
                 let seq = 1;
@@ -1058,5 +1485,217 @@ module.exports = {
             return res.status(500).json({ success: false, status: 500, message: 'Error interno del servidor al optimizar la ruta.' });
         }
     },
-};
 
+    /**
+     * 🔎 GET /api/routes/:route_id/adjustments
+     * DIAGNÓSTICO de la desincronización entre la ruta y sus jornadas ABIERTAS (hoy .. hoy+30).
+     * No modifica nada.
+     *
+     * 🧠 El porqué: la jornada (`store_visits`) es una FOTO que se toma al iniciar la ruta,
+     * mientras que la membresía (`routes_stores`) sigue VIVA. Si después de iniciar se agrega
+     * o se quita una tienda, la foto y la realidad divergen y nada las reconcilia: la tienda
+     * nueva no se puede marcar ("no tiene visitas pendientes para hoy") y la tienda retirada
+     * sigue apareciendo como parada del día.
+     *
+     * ⚠️ La comparación es de CONJUNTOS, no de cantidades. Si el mismo día se sacó una tienda
+     * y se agregó otra, los totales cuadran (46 vínculos, 46 paradas) pero hay una parada
+     * huérfana y una tienda sin parada. Contar diría "todo en orden" y el error seguiría vivo.
+     */
+    async getRouteAdjustments(req, res) {
+        try {
+            const { route_id } = req.params;
+            const companyId = req.user?.companyId;
+            const rid = parseInt(route_id);
+
+            if (isNaN(rid)) {
+                return res.status(400).json({ success: false, status: 400, message: 'ID de ruta inválido.' });
+            }
+
+            const route = await routes.findOne({
+                where: { id: rid, company_id: companyId },
+                attributes: ['id', 'name'],
+            });
+            if (!route) {
+                return res.status(404).json({ success: false, status: 404, message: 'La ruta no existe o no pertenece a su compañía.' });
+            }
+
+            const tz = req.user?.companyTimezone || 'America/Bogota';
+            const jornadas = await construirDiagnosticoDeAjuste({ rid, companyId, tz });
+
+            // Solo se informan las jornadas sobre las que este usuario podría actuar.
+            const visibles = jornadas.filter((j) => puedeAjustarJornada(req, j.responsable.user_id));
+
+            const total_faltantes = visibles.reduce((n, j) => n + j.faltantes.length, 0);
+            const total_sobrantes = visibles.reduce((n, j) => n + j.sobrantes.length, 0);
+            const total_bloqueadas = visibles.reduce((n, j) => n + j.bloqueadas.length, 0);
+
+            return res.status(200).json({
+                success: true,
+                status: 200,
+                route_id: rid,
+                route_name: route.name,
+                hay_jornadas: visibles.length > 0,
+                requiere_ajuste: (total_faltantes + total_sobrantes) > 0,
+                jornadas: visibles.map(({ fecha_marca, ...j }) => j), // `fecha_marca` es interno
+                total_faltantes,
+                total_sobrantes,
+                total_bloqueadas,
+            });
+        } catch (error) {
+            console.error("❌ Error al diagnosticar los ajustes de la ruta:", error);
+            return res.status(500).json({ success: false, status: 500, message: 'Error interno del servidor al revisar los ajustes de la ruta.' });
+        }
+    },
+
+    /**
+     * 🛠️ POST /api/routes/:route_id/adjustments
+     * APLICA el ajuste que el usuario aprobó explícitamente en el diálogo.
+     * Body: { agregar: [{ visit_day, store_id }], quitar: [visit_id, ...] }
+     *
+     * 🧠 Nada se sincroniza solo: el usuario decide ítem por ítem. Por eso "iniciar ruta"
+     * sigue siendo idempotente y NO toca las jornadas ya abiertas — si sincronizara sola,
+     * pisaría estas decisiones (un "no agregar" volvería a aparecer, una parada quitada
+     * resucitaría).
+     *
+     * Cada ítem se REVALIDA contra la base dentro de la transacción: el diálogo pudo abrirse
+     * hace minutos y la realidad pudo cambiar (la tienda volvió a la ruta, la parada ya se
+     * marcó). Lo que ya no aplica se devuelve en `omitidas` con su motivo, sin abortar el resto.
+     */
+    async applyRouteAdjustments(req, res) {
+        const transaction = await routes.sequelize.transaction();
+        try {
+            const { route_id } = req.params;
+            const companyId = req.user?.companyId;
+            const rid = parseInt(route_id);
+
+            if (isNaN(rid)) {
+                await transaction.rollback();
+                return res.status(400).json({ success: false, status: 400, message: 'ID de ruta inválido.' });
+            }
+
+            const route = await routes.findOne({
+                where: { id: rid, company_id: companyId },
+                attributes: ['id', 'name'],
+                transaction,
+            });
+            if (!route) {
+                await transaction.rollback();
+                return res.status(404).json({ success: false, status: 404, message: 'La ruta no existe o no pertenece a su compañía.' });
+            }
+
+            const agregar = Array.isArray(req.body?.agregar) ? req.body.agregar : [];
+            const quitar = Array.isArray(req.body?.quitar) ? req.body.quitar : [];
+
+            if (agregar.length === 0 && quitar.length === 0) {
+                await transaction.rollback();
+                return res.status(400).json({ success: false, status: 400, message: 'No se indicó ningún ajuste por aplicar.' });
+            }
+
+            const tz = req.user?.companyTimezone || 'America/Bogota';
+            const jornadas = await construirDiagnosticoDeAjuste({ rid, companyId, tz, transaction });
+            const porDia = new Map(jornadas.map((j) => [j.visit_day, j]));
+
+            const agregadas = [];
+            const quitadas = [];
+            const omitidas = [];
+
+            // ── Agregar paradas faltantes ──────────────────────────────────────────────
+            for (const item of agregar) {
+                const dia = String(item?.visit_day || '');
+                const sid = parseInt(item?.store_id);
+                const jornada = porDia.get(dia);
+
+                if (!jornada || isNaN(sid)) {
+                    omitidas.push({ tipo: 'agregar', visit_day: dia, store_id: isNaN(sid) ? null : sid, motivo: 'Esa jornada ya no está abierta.' });
+                    continue;
+                }
+                if (!puedeAjustarJornada(req, jornada.responsable.user_id)) {
+                    omitidas.push({ tipo: 'agregar', visit_day: dia, store_id: sid, motivo: 'No puedes modificar la jornada de otro vendedor.' });
+                    continue;
+                }
+                const faltante = jornada.faltantes.find((f) => f.store_id === sid);
+                if (!faltante) {
+                    omitidas.push({ tipo: 'agregar', visit_day: dia, store_id: sid, motivo: 'Esa tienda ya tiene parada ese día o ya no pertenece a la ruta.' });
+                    continue;
+                }
+
+                const fila = construirParada({
+                    store: { id: faltante.store_id, name: faltante.store_name, address: faltante.store_address },
+                    route,
+                    userId: jornada.responsable.user_id,
+                    userName: jornada.responsable.user_name,
+                    visitDay: dia,
+                    fechaMarca: jornada.fecha_marca,
+                });
+                // ignoreDuplicates → ON CONFLICT DO NOTHING contra `uq_store_visits_daily`:
+                // aplicar dos veces el mismo ajuste no duplica ni reinicia nada.
+                await store_visits.bulkCreate([fila], { ignoreDuplicates: true, transaction });
+                agregadas.push({ visit_day: dia, store_id: sid, store_name: faltante.store_name });
+            }
+
+            // ── Quitar paradas huérfanas (hard delete, solo 'pending') ─────────────────
+            for (const raw of quitar) {
+                const vid = parseInt(raw);
+                if (isNaN(vid)) {
+                    omitidas.push({ tipo: 'quitar', visit_id: null, motivo: 'Identificador de visita inválido.' });
+                    continue;
+                }
+
+                const jornada = jornadas.find((j) => j.sobrantes.some((s) => s.visit_id === vid));
+                const sobrante = jornada && jornada.sobrantes.find((s) => s.visit_id === vid);
+                if (!jornada || !sobrante) {
+                    omitidas.push({ tipo: 'quitar', visit_id: vid, motivo: 'Esa parada ya no se puede quitar (volvió a la ruta, ya se marcó o ya no existe).' });
+                    continue;
+                }
+                if (!puedeAjustarJornada(req, jornada.responsable.user_id)) {
+                    omitidas.push({ tipo: 'quitar', visit_id: vid, motivo: 'No puedes modificar la jornada de otro vendedor.' });
+                    continue;
+                }
+
+                // 🛡️ Última barrera antes del hard delete. El diagnóstico ya excluye todo lo que
+                // no esté en 'pending', pero se comprueba de nuevo contra las tablas hijas porque
+                // `sales.visit_id` está en ON DELETE SET NULL: borrar una parada con venta NO
+                // fallaría, simplemente desengancharía la venta en silencio. Daño invisible.
+                const [{ ligada }] = await routes.sequelize.query(
+                    `SELECT (EXISTS (SELECT 1 FROM sales WHERE visit_id = :vid)
+                          OR EXISTS (SELECT 1 FROM store_no_sale_reports WHERE visit_id = :vid)) AS ligada`,
+                    { type: routes.sequelize.QueryTypes.SELECT, replacements: { vid }, transaction }
+                );
+                if (ligada) {
+                    omitidas.push({ tipo: 'quitar', visit_id: vid, motivo: 'La parada tiene una venta o un reporte de no-venta asociado.' });
+                    continue;
+                }
+
+                const borradas = await store_visits.destroy({
+                    where: { id: vid, route_id: rid, status: 'pending' },
+                    transaction,
+                });
+                if (borradas > 0) {
+                    quitadas.push({ visit_day: jornada.visit_day, visit_id: vid, store_name: sobrante.store_name });
+                } else {
+                    omitidas.push({ tipo: 'quitar', visit_id: vid, motivo: 'La parada cambió de estado mientras se aplicaba el ajuste.' });
+                }
+            }
+
+            await transaction.commit();
+
+            const partes = [];
+            if (agregadas.length) partes.push(`${agregadas.length} visita${agregadas.length === 1 ? '' : 's'} agregada${agregadas.length === 1 ? '' : 's'}`);
+            if (quitadas.length) partes.push(`${quitadas.length} visita${quitadas.length === 1 ? '' : 's'} quitada${quitadas.length === 1 ? '' : 's'}`);
+
+            return res.status(200).json({
+                success: true,
+                status: 200,
+                message: partes.length ? `Ajuste aplicado: ${partes.join(' y ')}.` : 'No se aplicó ningún cambio.',
+                route_id: rid,
+                agregadas,
+                quitadas,
+                omitidas,
+            });
+        } catch (error) {
+            if (transaction && !transaction.finished) await transaction.rollback();
+            console.error("❌ Error al aplicar el ajuste de la ruta:", error);
+            return res.status(500).json({ success: false, status: 500, message: 'Error interno del servidor al aplicar el ajuste.' });
+        }
+    },
+};

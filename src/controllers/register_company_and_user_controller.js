@@ -1,4 +1,4 @@
-const { users, roles, companies, user_companies, sequelize } = require('../models');
+const { users, roles, companies, user_companies, inventory_locations, sequelize } = require('../models');
 const crypto = require('crypto');
 const { sendWelcomeEmail, notifyAdmin } = require('../utils/emailNotifier');
 
@@ -109,6 +109,18 @@ module.exports = {
                     user_type: 'owner',  // ✅ NUEVO ENFOQUE UNIFICADO -> owner o collaborator
                     is_default: true,    // ✅ Primera empresa es por defecto
                     status: 'inactive'
+                }, { transaction });
+
+                // 5.4b Crear la BODEGA CENTRAL por defecto de la compañía. Es el pivote del stock de
+                //      productos (se resuelve por is_default=true); sin ella no se podría operar el
+                //      inventario. Toda compañía nace con su central.
+                await inventory_locations.create({
+                    company_id: newCompany.id,
+                    name: 'Bodega Central',
+                    type: 'central',
+                    status: 'abierta',
+                    is_default: true,
+                    is_active: true
                 }, { transaction });
 
                 // 5.5 Confirmar la transacción

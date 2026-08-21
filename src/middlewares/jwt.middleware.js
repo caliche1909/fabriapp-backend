@@ -32,7 +32,7 @@ const verifyToken = async (req, res, next) => {
                     {
                         model: companies,
                         as: 'company',
-                        attributes: ['id', 'name']
+                        attributes: ['id', 'name', 'timezone', 'sales_inventory_mode']
                     },
                     {
                         model: roles,
@@ -57,6 +57,12 @@ const verifyToken = async (req, res, next) => {
                 email: email,
                 companyId: companyId,
                 companyName: userCompany.company.name,
+                // Zona horaria IANA de la compañía activa (Capa B). Se lee de la BD en cada
+                // request (no del token) → siempre fresca. Fallback defensivo a Bogotá.
+                companyTimezone: userCompany.company.timezone || 'America/Bogota',
+                // Modo de ventas e inventarios de la compañía activa. Igual que la zona horaria:
+                // se lee de la BD en cada request (no del token) → un cambio aplica de inmediato.
+                companySalesInventoryMode: userCompany.company.sales_inventory_mode || 'sin_inventario',
                 roleId: roleId,
                 role: userCompany.role ? userCompany.role.name : 'OWNER',
                 userType: 'owner',
@@ -77,7 +83,7 @@ const verifyToken = async (req, res, next) => {
                     {
                         model: companies,
                         as: 'company',
-                        attributes: ['id', 'name']
+                        attributes: ['id', 'name', 'timezone', 'sales_inventory_mode']
                     },
                     {
                         model: roles,
@@ -110,6 +116,11 @@ const verifyToken = async (req, res, next) => {
                 email: email,
                 companyId: companyId,
                 companyName: userCompany.company.name,
+                // Zona horaria IANA de la compañía activa (Capa B). Se lee de la BD en cada
+                // request (no del token) → siempre fresca. Fallback defensivo a Bogotá.
+                companyTimezone: userCompany.company.timezone || 'America/Bogota',
+                // Modo de ventas e inventarios de la compañía activa (ver la rama del owner).
+                companySalesInventoryMode: userCompany.company.sales_inventory_mode || 'sin_inventario',
                 roleId: roleId,
                 role: userCompany.role ? userCompany.role.name : 'COLLABORATOR',
                 userType: 'collaborator',

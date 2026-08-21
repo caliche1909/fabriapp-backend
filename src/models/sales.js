@@ -73,6 +73,14 @@ module.exports = function (sequelize, DataTypes) {
         key: 'id'
       }
     },
+    location_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true, // Bodega desde la que se vendió (bodega móvil del vendedor). Las ventas viejas no la tienen.
+      references: {
+        model: 'inventory_locations',
+        key: 'id'
+      }
+    },
     deleted_at: {
       type: DataTypes.DATE,
       allowNull: true
@@ -149,6 +157,18 @@ module.exports = function (sequelize, DataTypes) {
         ]
       },
       {
+        name: "idx_sales_active_by_location", // Ventas por bodega (activas)
+        fields: [{ name: "location_id" }],
+        where: { deleted_at: null }
+      },
+      {
+        // En la BD (migración 20260811120100) es parcial también por `visit_id IS NOT NULL`;
+        // aquí se documenta la parte principal (activas). Para sumar/consultar las varias ventas de una visita.
+        name: "idx_sales_active_by_visit",
+        fields: [{ name: "visit_id" }],
+        where: { deleted_at: null }
+      },
+      {
         name: "sales_pkey",
         unique: true,
         fields: [
@@ -207,6 +227,21 @@ module.exports = function (sequelize, DataTypes) {
       as: 'visit',
       onDelete: 'SET NULL',
       onUpdate: 'NO ACTION'
+    });
+
+    // 📌 Relación con la BODEGA desde la que se vendió (opcional)
+    Sales.belongsTo(models.inventory_locations, {
+      foreignKey: 'location_id',
+      as: 'location',
+      onDelete: 'RESTRICT',
+      onUpdate: 'NO ACTION'
+    });
+
+    // 📌 Relación con el DETALLE de la venta (sus ítems)
+    Sales.hasMany(models.sale_items, {
+      foreignKey: 'sale_id',
+      as: 'items',
+      onDelete: 'CASCADE'
     });
 
     // 📌 Relación con Users (usuario que eliminó)

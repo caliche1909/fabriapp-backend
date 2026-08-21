@@ -308,6 +308,9 @@ module.exports = {
                     logoPublicId: userCompany.company.logo_public_id,
                     website: userCompany.company.website,
                     timezone: userCompany.company.timezone,
+                    // Modo de ventas e inventarios: el frontend lo necesita para saber si el punto
+                    // de venta debe pedir bodega y stock, o vender del catálogo sin descontar.
+                    salesInventoryMode: userCompany.company.sales_inventory_mode,
                     latitude: latitude,
                     longitude: longitude,
                     isActive: userCompany.company.is_active,
@@ -662,7 +665,9 @@ module.exports = {
         let plainPassword = null;
 
         try {
-            const { name, lastName, email, phone, roleId, requireGeolocation, companyId, allowAccess } = req.body;
+            const { name, lastName, email, phone, roleId, requireGeolocation, allowAccess } = req.body;
+            // 🔒 La compañía SIEMPRE es la de la sesión (no la del body) → cierra IDOR multi-tenant.
+            const companyId = req.user.companyId;
 
             // 1. Validar que todos los campos requeridos estén presentes
             if (!name || !lastName || !email || !phone || !roleId || !companyId) {
@@ -755,6 +760,17 @@ module.exports = {
                     success: false,
                     status: 404,
                     message: 'El cargo asignado no existe'
+                });
+            }
+
+            // 5.1 🔒 El rol debe ser GLOBAL (company_id NULL) o de la compañía de la sesión,
+            //     y nunca el rol de sistema SUPER_ADMIN (el front ya lo excluye; se refuerza aquí).
+            if (roleData.name === 'SUPER_ADMIN' ||
+                (roleData.company_id !== null && String(roleData.company_id) !== String(companyId))) {
+                return res.status(403).json({
+                    success: false,
+                    status: 403,
+                    message: 'El cargo asignado no es válido para esta compañía.'
                 });
             }
 
@@ -899,6 +915,9 @@ module.exports = {
                 });
             }
 
+            // 🔒 La compañía SIEMPRE es la de la sesión (no la del body) → cierra IDOR multi-tenant.
+            const companyId = req.user.companyId;
+
             // 2. Verificar que el usuario existe
             const existingUser = await users.findByPk(userFound.id);
             if (!existingUser) {
@@ -910,7 +929,7 @@ module.exports = {
             }
 
             // 3. Verificar que la empresa existe
-            const company = await companies.findByPk(userDataToCreate.companyId);
+            const company = await companies.findByPk(companyId);
             if (!company) {
                 return res.status(404).json({
                     success: false,
@@ -929,11 +948,22 @@ module.exports = {
                 });
             }
 
+            // 4.1 🔒 El rol debe ser GLOBAL (company_id NULL) o de la compañía de la sesión,
+            //     y nunca el rol de sistema SUPER_ADMIN (el front ya lo excluye; se refuerza aquí).
+            if (roleData.name === 'SUPER_ADMIN' ||
+                (roleData.company_id !== null && String(roleData.company_id) !== String(companyId))) {
+                return res.status(403).json({
+                    success: false,
+                    status: 403,
+                    message: 'El cargo asignado no es válido para esta compañía.'
+                });
+            }
+
             // 5. Verificar que no exista una relación activa
             const existingRelation = await user_companies.findOne({
                 where: {
                     user_id: userFound.id,
-                    company_id: userDataToCreate.companyId
+                    company_id: companyId
                 }
             });
 
@@ -995,7 +1025,7 @@ module.exports = {
                 // 8.1 Crear la relación user_companies
                 await user_companies.create({
                     user_id: existingUser.id,
-                    company_id: userDataToCreate.companyId,
+                    company_id: companyId,
                     role_id: userDataToCreate.roleId,
                     user_type: userType,
                     is_default: true, // No es empresa por defecto ya que el usuario ya existe
@@ -1045,7 +1075,8 @@ module.exports = {
     // 📌 Obtener usuarios por compañía
     async getUsersByCompany(req, res) {
         try {
-            const { company_id } = req.params;
+            // 🔒 Compañía SIEMPRE desde la sesión (no del path) → cierra IDOR multi-tenant.
+            const company_id = req.user.companyId;
 
             // Validar parámetro obligatorio
             if (!company_id) {
@@ -1147,7 +1178,8 @@ module.exports = {
     // 📌 Obtener usuarios con geolocalización de una compañía (para mapa en tiempo real)
     async getUsersWithGeolocation(req, res) {
         try {
-            const { company_id } = req.params;
+            // 🔒 Compañía SIEMPRE desde la sesión (no del path) → cierra IDOR multi-tenant.
+            const company_id = req.user.companyId;
 
             // Validar parámetro obligatorio
             if (!company_id) {
@@ -1533,7 +1565,8 @@ module.exports = {
     async getSellers(req, res) {
 
         try {
-            const { company_id } = req.params;
+            // 🔒 Compañía SIEMPRE desde la sesión (no del path) → cierra IDOR multi-tenant.
+            const company_id = req.user.companyId;
 
             // 🔹 Validar parámetro obligatorio
             if (!company_id) {
@@ -1718,74 +1751,6 @@ module.exports = {
         }
     },
 
-    // 📌 CAMBIAR EMPRESA POR DEFECTO
-    async setDefaultCompany(req, res) {
-        try {
-            const { companyId } = req.params;
-            const userId = req.user?.id; // Asumiendo middleware JWT
-
-            if (!userId) {
-                return res.status(401).json({
-                    success: false,
-                    status: 401,
-                    message: "Usuario no autenticado"
-                });
-            }
-
-            if (!companyId) {
-                return res.status(400).json({
-                    success: false,
-                    status: 400,
-                    message: "ID de empresa requerido"
-                });
-            }
-
-            // Verificar que el usuario tiene acceso a esta empresa
-            const userCompany = await user_companies.findOne({
-                where: {
-                    user_id: userId,
-                    company_id: companyId,
-                    status: 'active'
-                },
-                include: [{
-                    model: companies,
-                    as: 'company',
-                    attributes: ['id', 'name']
-                }]
-            });
-
-            if (!userCompany) {
-                return res.status(404).json({
-                    success: false,
-                    status: 404,
-                    message: "No tienes acceso a esta empresa"
-                });
-            }
-
-            // Establecer como empresa por defecto
-            await userCompany.setAsDefault();
-
-            return res.status(200).json({
-                success: true,
-                status: 200,
-                message: `Empresa "${userCompany.company.name}" establecida como predeterminada`,
-                data: {
-                    companyId: companyId,
-                    companyName: userCompany.company.name,
-                    isDefault: true
-                }
-            });
-
-        } catch (error) {
-            console.error("❌ Error al cambiar empresa por defecto:", error);
-            return res.status(500).json({
-                success: false,
-                status: 500,
-                message: "Error interno del servidor"
-            });
-        }
-    },
-
     // 📌 LOGOUT DE USUARIO
     async logout(req, res) {
         try {
@@ -1862,109 +1827,6 @@ module.exports = {
 
         } catch (error) {
             console.error("❌ Error obteniendo estadísticas:", error);
-            return res.status(500).json({
-                success: false,
-                status: 500,
-                message: "Error interno del servidor"
-            });
-        }
-    },
-
-    // 📌 CAMBIAR EMPRESA ACTIVA (regenerar token)
-    async switchActiveCompany(req, res) {
-        try {
-            const { companyId } = req.params;
-            const userId = req.user?.id;
-
-            if (!userId) {
-                return res.status(401).json({
-                    success: false,
-                    status: 401,
-                    message: "Usuario no autenticado"
-                });
-            }
-
-            if (!companyId) {
-                return res.status(400).json({
-                    success: false,
-                    status: 400,
-                    message: "ID de empresa requerido"
-                });
-            }
-
-            // Verificar que el usuario tiene acceso a esta empresa
-            const userCompany = await user_companies.findOne({
-                where: {
-                    user_id: userId,
-                    company_id: companyId,
-                    status: 'active'
-                },
-                include: [
-                    {
-                        model: companies,
-                        as: 'company',
-                        attributes: ['id', 'name']
-                    },
-                    {
-                        model: roles,
-                        as: 'role',
-                        include: [{
-                            model: permissions,
-                            as: 'permissions',
-                            through: { attributes: [] },
-                            attributes: ['code', 'name']
-                        }]
-                    }
-                ]
-            });
-
-            if (!userCompany) {
-                return res.status(404).json({
-                    success: false,
-                    status: 404,
-                    message: "No tienes acceso a esta empresa"
-                });
-            }
-
-            // 🔑 REGENERAR TOKEN con nueva empresa (como nuevo login)
-            const newToken = jwt.sign(
-                {
-                    userId: userId,
-                    email: req.user.email,
-                    companyId: userCompany.company_id,
-                    roleId: userCompany.role_id,
-                    userType: userCompany.user_type
-                },
-                SECRET_KEY,
-                { expiresIn: '8h' }
-            );
-
-            // Formatear información de la empresa activa
-            const activeCompany = {
-                id: userCompany.company_id,
-                name: userCompany.company.name,
-                userType: userCompany.user_type,
-                role: userCompany.role ? userCompany.role.name : 'COLLABORATOR',
-                permissions: userCompany.role && userCompany.role.permissions
-                    ? userCompany.role.permissions.map(p => ({
-                        code: p.code,
-                        name: p.name
-                    }))
-                    : []
-            };
-
-            return res.status(200).json({
-                success: true,
-                status: 200,
-                message: `Empresa activa cambiada a "${userCompany.company.name}"`,
-                data: {
-                    token: newToken, // ✅ Nuevo token específico
-                    activeCompany: activeCompany
-                }
-            });
-
-        } catch (error) {
-            console.error("❌ Error al cambiar empresa activa:", error);
             return res.status(500).json({
                 success: false,
                 status: 500,
