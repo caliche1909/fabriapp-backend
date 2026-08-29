@@ -443,18 +443,43 @@ module.exports = {
 
     /**
      * 📌 GET /api/sales/reports/sellers
-     * Lista de vendedores (miembros activos de la compañía) para los selectores.
+     * Vendedores para el selector del Cuadre: **quien tiene historia en la compañía**, no
+     * quien trabaja aquí hoy.
+     *
+     * 🔑 El Cuadre es un reporte HISTÓRICO y su tabla por vendedor sale de `store_visits`
+     * unido a `users`, así que lista a cualquiera que tuviera paradas en el período —incluida
+     * gente que ya salió de la empresa—. Este selector preguntaba `uc.status = 'active'`, o sea
+     * una pregunta del PRESENTE, y por eso mostraba un nombre en la tabla que no se podía elegir
+     * en el filtro. Medido en SILOÉ: en febrero de 2026 la tabla traía 3 vendedores y el selector
+     * ofrecía 2; los $20.450.251 del tercero (el 55 % del mes) no tenían dueño seleccionable.
+     * En todo el histórico eran 2.455 ventas / $83.338.774 imposibles de desglosar.
+     *
+     * Se listan, entonces:
+     *   - los miembros ACTIVOS, aunque no hayan vendido nunca (hay que poder confirmar que
+     *     alguien no hizo nada en el período: sin él en la lista, no se puede ni preguntar);
+     *   - más cualquiera con visitas o ventas en esta compañía, siga o no siendo miembro.
+     * Los inactivos SIN historia quedan fuera: filtrar por ellos solo devolvería ceros.
+     *
+     * El `LEFT JOIN` a `user_companies` es deliberado: cubre a quien perdió la membresía por
+     * completo (fila borrada, no solo `status <> 'active'`) pero dejó ventas en el histórico.
+     * `activo` viaja para que el selector marque a los que ya no están.
      */
     async getSellers(req, res) {
         try {
             const cid = req.user.companyId;
             const sellers = await sequelize.query(
                 `SELECT u.id AS user_id,
-                        TRIM(u.first_name || ' ' || COALESCE(u.last_name, '')) AS nombre
-                 FROM user_companies uc
-                 JOIN users u ON u.id = uc.user_id
-                 WHERE uc.company_id = :cid AND uc.status = 'active'
-                 ORDER BY nombre`,
+                        TRIM(u.first_name || ' ' || COALESCE(u.last_name, '')) AS nombre,
+                        COALESCE(uc.status = 'active', false) AS activo
+                 FROM users u
+                 LEFT JOIN user_companies uc ON uc.user_id = u.id AND uc.company_id = :cid
+                 WHERE uc.status = 'active'
+                    OR EXISTS (SELECT 1 FROM store_visits sv
+                                 JOIN stores st ON st.id = sv.store_id
+                                WHERE sv.user_id = u.id AND st.company_id = :cid)
+                    OR EXISTS (SELECT 1 FROM sales sa
+                                WHERE sa.user_id = u.id AND sa.company_id = :cid)
+                 ORDER BY activo DESC, nombre`,
                 { type: QueryTypes.SELECT, replacements: { cid } }
             );
             return res.status(200).json({ success: true, data: sellers });

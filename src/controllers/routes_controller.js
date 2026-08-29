@@ -1,7 +1,7 @@
 const { routes, users, user_companies, roles, stores, route_types, store_visits } = require('../models');
 const { parseWindows, classify, formatMinutes, optimizeOpenStores } = require('../utils/routeOptimization');
 const { Op } = require('sequelize');
-const { construirParada } = require('../utils/storeVisits');
+const { construirParada, autorizarSobreLaRuta } = require('../utils/storeVisits');
 
 /**
  * 📅 Horizonte máximo de planificación de rutas, en días.
@@ -38,11 +38,76 @@ const esFechaValida = (texto) => {
  * ⚠️ NO se revalida el día hábil: la jornada YA existe, así que esa validación ya ocurrió
  * al iniciarla (o el owner la saltó a propósito para una jornada extraordinaria). Volver a
  * exigirla haría imposible ajustar justo esos casos.
+ *
+ * 🚧 ESTA ES LA ÚNICA ESCRITURA SOBRE UNA JORNADA AJENA QUE SIGUE PERMITIDA, y es deliberado
+ * (decisión del 2026-08-27). Todo lo demás —marcar, vender, reportar no-venta, optimizar y crear
+ * una venta ocasional— exige ser el ENCARGADO ACTUAL de la ruta, vía `autorizarSobreLaVisita` /
+ * `autorizarSobreLaRuta`, sin excepción para el owner: quien quiera operar una ruta se la asigna.
+ *
+ * La línea que las separa es OPERAR vs. REPARAR. Ajustar no recorre la ruta: repone las paradas
+ * de tiendas que se vincularon DESPUÉS de iniciarla (el caso `sin_parada`, al que la propia UI
+ * manda con "Usa 'Ajustar' para agregar la visita") y quita las de tiendas que se retiraron. Es
+ * mantenimiento de la lista, del mismo lado que "iniciar", y se permite incluso con la ruta en
+ * marcha porque es justo cuando hace falta.
  */
 const puedeAjustarJornada = (req, jornadaUserId) => {
     if (req.user?.userType === 'owner') return true;
     if (jornadaUserId === req.user?.id) return true;
     return Array.isArray(req.user?.permissions) && req.user.permissions.includes('start_route_for_others');
+};
+
+/** Nombre completo del responsable, para desnormalizarlo en la parada. */
+const nombreDelResponsable = async (userId, transaction = null) => {
+    const u = await users.findByPk(userId, { attributes: ['first_name', 'last_name'], transaction });
+    return u ? `${u.first_name} ${u.last_name}`.trim() : null;
+};
+
+/**
+ * 🧾 Da a UNA parada exactamente la misma forma que las filas de `getRouteDayVisits`, para que
+ * el frontend pueda insertarla en la lista del cajón sin recargar la jornada entera.
+ *
+ * El estado por horario (abierta / abre más tarde / cerrada) depende de la HORA, así que se
+ * calcula aquí con la zona de la compañía —igual que en el listado— y no se deja al cliente,
+ * que usaría la zona del dispositivo y podría discrepar.
+ */
+const formatearParadaDelDia = async (visita, tz) => {
+    const tienda = await stores.findByPk(visita.store_id, {
+        attributes: [
+            'opening_time', 'closing_time',
+            [routes.sequelize.fn('ST_Y', routes.sequelize.col('ubicacion')), 'latitude'],
+            [routes.sequelize.fn('ST_X', routes.sequelize.col('ubicacion')), 'longitude'],
+        ],
+        raw: true,
+    });
+    const [{ nowmin }] = await routes.sequelize.query(
+        `SELECT EXTRACT(HOUR FROM (now() AT TIME ZONE :tz)) * 60
+              + EXTRACT(MINUTE FROM (now() AT TIME ZONE :tz)) AS nowmin`,
+        { type: routes.sequelize.QueryTypes.SELECT, replacements: { tz } }
+    );
+
+    let estado = null;
+    let abre_a = null;
+    if (visita.status === 'pending') {
+        const c = classify(parseWindows(tienda?.opening_time, tienda?.closing_time), Number(nowmin));
+        estado = c.estado;
+        if (c.estado === 'abre_mas_tarde') abre_a = formatMinutes(c.abreA);
+    }
+
+    return {
+        visit_id: visita.id,
+        store_id: visita.store_id,
+        store_name: visita.store_name,
+        store_address: visita.store_address,
+        status: visita.status,
+        arrived_at: visita.arrived_at,
+        sale_amount: Number(visita.sale_amount) || 0,
+        optimized_seq: visita.optimized_seq,
+        visit_type: visita.visit_type,
+        latitude: tienda?.latitude != null ? Number(tienda.latitude) : null,
+        longitude: tienda?.longitude != null ? Number(tienda.longitude) : null,
+        estado,
+        abre_a,
+    };
 };
 
 /**
@@ -147,6 +212,12 @@ const construirDiagnosticoDeAjuste = async ({ rid, companyId, tz, transaction = 
           WHERE sv.route_id = :rid
             AND sv.visit_day >= ref.hoy
             AND sv.visit_day <= ref.hoy + CAST(:horizonte AS integer)
+            -- 🏷️ Las paradas OCASIONALES quedan fuera del diagnóstico. Su tienda no pertenece
+            -- a la ruta por definición, así que encajarían al milímetro en la condición de
+            -- abajo y el diálogo las ofrecería para borrar con la casilla marcada. Se ven
+            -- idénticas a una parada huérfana en los datos: esta marca es lo único que las
+            -- distingue de una tienda que salió de la ruta con la jornada abierta.
+            AND sv.visit_type <> 'occasional'
             AND (s.id IS NULL
                  OR s.deleted_at IS NOT NULL
                  OR NOT EXISTS (SELECT 1 FROM routes_stores rs
@@ -1232,12 +1303,22 @@ module.exports = {
                 responsable = asignado || null;
             }
 
-            // 🔐 Poder ACTUAR sobre la jornada = ser el encargado actual de la ruta. Consultar la de
-            // otro exige supervisar todas las rutas. Una ruta sin encargado no la puede operar nadie,
-            // pero tampoco tiene nada que esconder (no se puede iniciar), así que se deja consultar.
-            const targetUserId = route.user_id || req.user.id;
-            const esMiLista = !route.user_id || route.user_id === req.user.id;
-            if (!esMiLista) {
+            // 🔐 Dos preguntas DISTINTAS que antes compartían una sola bandera:
+            //
+            //   ¿Puedo OPERAR esta lista? → ser el encargado ACTUAL de la ruta. Una ruta **sin
+            //     encargado no la opera nadie**, ni el owner: no se puede iniciar (400), ni marcar,
+            //     vender, reportar no-venta, optimizar o agregar una venta ocasional (403 en los
+            //     cuatro). Antes `esMiLista` valía `true` para TODOS cuando `route.user_id` era
+            //     null —por la rama `!route.user_id`— así que el cajón salía operable y ofrecía un
+            //     menú de acciones que el servidor iba a rechazar. Ofrecer lo que se va a negar es
+            //     peor que no ofrecerlo.
+            //
+            //   ¿Puedo VERLA? → la propia siempre; la de otro exige supervisar todas las rutas; y
+            //     una ruta sin encargado no es de nadie y no tiene nada que esconder, así que se
+            //     deja consultar (es además donde se explica que hay que asignarle un vendedor).
+            const targetUserId = route.user_id || null;
+            const esMiLista = Boolean(route.user_id) && route.user_id === req.user.id;
+            if (!esMiLista && route.user_id) {
                 const puedeVerDeOtros = req.user?.userType === 'owner'
                     || (Array.isArray(req.user?.permissions) && req.user.permissions.includes('view_routes_by_company'));
                 if (!puedeVerDeOtros) {
@@ -1255,8 +1336,21 @@ module.exports = {
             // escondería la mitad de la lista al que la está recorriendo.
             const visitas = await store_visits.findAll({
                 where: { route_id: rid, visit_day: targetDate },
-                attributes: ['id', 'store_id', 'store_name', 'store_address', 'status', 'arrived_at', 'sale_amount', 'optimized_seq'],
-                include: [{ association: 'store', attributes: ['opening_time', 'closing_time'], required: false }],
+                attributes: ['id', 'store_id', 'store_name', 'store_address', 'status', 'arrived_at', 'sale_amount', 'optimized_seq', 'visit_type'],
+                // 📍 Las coordenadas viajan con cada parada para que el cajón sea AUTOSUFICIENTE:
+                // el menú de la fila (cómo llegar, ver en el mapa, marcar con la regla de los
+                // 300 m) necesitaba la tienda completa y la sacaba de la MEMBRESÍA de la ruta.
+                // Una parada ocasional no está en esa lista —ni una tienda retirada de la ruta
+                // con la jornada abierta—, así que el menú no se abría.
+                include: [{
+                    association: 'store',
+                    attributes: [
+                        'opening_time', 'closing_time',
+                        [routes.sequelize.fn('ST_Y', routes.sequelize.col('store.ubicacion')), 'latitude'],
+                        [routes.sequelize.fn('ST_X', routes.sequelize.col('store.ubicacion')), 'longitude'],
+                    ],
+                    required: false,
+                }],
                 order: [
                     // Pendientes primero; dentro de ellas, por el orden optimizado (NULLS LAST =
                     // las aún no optimizadas al final, alfabéticas). Visitadas/completadas por nombre.
@@ -1288,6 +1382,11 @@ module.exports = {
                     arrived_at: v.arrived_at,
                     sale_amount: Number(v.sale_amount) || 0,
                     optimized_seq: v.optimized_seq,
+                    // 'occasional' = la agregó el vendedor sobre la marcha; su tienda no
+                    // pertenece a la ruta. El cajón puede distinguirla visualmente.
+                    visit_type: v.visit_type,
+                    latitude: v['store.latitude'] !== undefined && v['store.latitude'] !== null ? Number(v['store.latitude']) : null,
+                    longitude: v['store.longitude'] !== undefined && v['store.longitude'] !== null ? Number(v['store.longitude']) : null,
                     estado,
                     abre_a,
                 };
@@ -1322,7 +1421,8 @@ module.exports = {
                 tiendas_en_ruta: tiendasEnRuta,
                 started: visitas.length > 0,
                 // De quién es la jornada y si es la del propio usuario (la única sobre la que
-                // puede actuar: marcar, optimizar, vender).
+                // puede actuar: marcar, optimizar, vender). `null` = la ruta no tiene encargado,
+                // y entonces no es de nadie: no se puede iniciar ni operar.
                 user_id: targetUserId,
                 es_mi_lista: esMiLista,
                 // Responsable: quien la lleva ese día si ya está iniciada; si no, el vendedor
@@ -1372,19 +1472,15 @@ module.exports = {
                 return res.status(404).json({ success: false, status: 404, message: 'La ruta no existe o no pertenece a su compañía.' });
             }
 
-            // 🔐 Optimizar NO es solo leer: persiste `optimized_seq` en las paradas del día. Por eso
-            // exige ser el ENCARGADO ACTUAL, la misma regla que marcar, vender y reportar no-venta.
-            if (!route.user_id || route.user_id !== req.user.id) {
-                const encargado = route.user_id
-                    ? await users.findByPk(route.user_id, { attributes: ['first_name', 'last_name'] })
-                    : null;
-                return res.status(403).json({
-                    success: false,
-                    status: 403,
-                    message: encargado
-                        ? `Esta ruta está a cargo de ${`${encargado.first_name} ${encargado.last_name}`.trim()}. Solo su encargado actual puede optimizar el recorrido.`
-                        : 'Esta ruta no tiene un encargado asignado, así que nadie puede recorrerla.',
-                });
+            // 🔐 Optimizar NO es solo leer: persiste `optimized_seq` en las paradas del día, y
+            // además cuesta (GPS del dispositivo + cálculo del recorrido). Recalcularlo alguien que
+            // no lo va a caminar es gasto sin destinatario. Misma regla que marcar, vender,
+            // reportar no-venta y agregar una venta ocasional: el ENCARGADO ACTUAL.
+            const permisoRuta = await autorizarSobreLaRuta({
+                route, userId: req.user.id, accion: 'optimizar el recorrido',
+            });
+            if (!permisoRuta.autorizado) {
+                return res.status(403).json({ success: false, status: 403, message: permisoRuta.mensaje });
             }
 
             // Día hábil + minutos del momento actual (zona horaria de la compañía, Capa B).
@@ -1696,6 +1792,164 @@ module.exports = {
             if (transaction && !transaction.finished) await transaction.rollback();
             console.error("❌ Error al aplicar el ajuste de la ruta:", error);
             return res.status(500).json({ success: false, status: 500, message: 'Error interno del servidor al aplicar el ajuste.' });
+        }
+    },
+
+    /**
+     * 🆕 POST /api/routes/:route_id/occasional-visit   body: { store_id }
+     *
+     * **Venta ocasional:** el vendedor va en la ruta Norte, lo llama un tendero de la ruta Sur
+     * y le agrega esa tienda a su jornada de HOY. Crea UNA parada `pending` más, y a partir de
+     * ahí el flujo es el de siempre: aparece en el cajón del día, entra en la optimización del
+     * recorrido, se marca visitada y se le vende.
+     *
+     * 🔑 **La parada lleva el `route_id` de la ruta que se está corriendo, a propósito.** Es una
+     * parada más del día, como si se la hubieran asignado desde el principio: si el vendedor se
+     * compromete y no la hace, es un incumplimiento real y debe contar como pendiente. Colgarla
+     * de la ruta también le da tres cosas gratis que una parada "suelta" (sin ruta) no tendría:
+     *   1. el índice único `(store_id, route_id, visit_day)` la protege contra duplicados —con
+     *      `route_id NULL` Postgres considera los nulos distintos entre sí y nada impediría
+     *      crear la misma parada cinco veces;
+     *   2. la autorización cuelga del **encargado actual de la ruta**, así que sobrevive a un
+     *      relevo a media jornada;
+     *   3. el cajón de visitas lista por (ruta, día), así que se ve sin tocar nada.
+     *
+     * ⚠️ **NO se vincula la tienda a la ruta** (`routes_stores`): esa tabla es la membresía
+     * PERMANENTE y la tienda del sur quedaría en la ruta norte mañana y todos los días. Lo que
+     * la distingue es `visit_type = 'occasional'`, que además impide que el diagnóstico de
+     * "Ajustar" la lea como parada huérfana y ofrezca borrarla.
+     *
+     * 📅 Solo HOY. Programar a futuro es "planear la ruta", y para eso está iniciar/ajustar; una
+     * venta ocasional es por definición algo que surge sobre la marcha.
+     */
+    async createOccasionalVisit(req, res) {
+        let transaction = null;
+        try {
+            const companyId = req.user?.companyId;
+            const tz = req.user?.companyTimezone || 'America/Bogota';
+            const rid = parseInt(req.params.route_id);
+            const sid = parseInt(req.body?.store_id);
+
+            if (isNaN(rid) || isNaN(sid)) {
+                return res.status(400).json({
+                    success: false, status: 400,
+                    message: isNaN(rid) ? 'ID de ruta inválido.' : 'Debes indicar la tienda a visitar.',
+                });
+            }
+
+            const route = await routes.findOne({
+                where: { id: rid, company_id: companyId },
+                attributes: ['id', 'name', 'user_id'],
+            });
+            if (!route) {
+                return res.status(404).json({ success: false, status: 404, message: 'La ruta no existe o no pertenece a su compañía.' });
+            }
+
+            // 🔐 Mismo candado que marcar, vender y optimizar: el ENCARGADO ACTUAL, sin excepción
+            // para el owner ni para `start_route_for_others`.
+            //
+            // Antes esto usaba `puedeAjustarJornada`, que SÍ deja pasar al owner y al supervisor. Era
+            // incoherente: podían crearle la parada a un vendedor pero no marcarla ni venderle, así que
+            // nacía huérfana en la jornada de alguien que no la pidió. Y no tiene sentido de fondo: una
+            // venta ocasional surge de estar FRENTE a la tienda. Quien quiera hacerla se asigna la ruta.
+            //
+            // ⚠️ Va ANTES de comprobar si hay jornada, y antes de abrir la transacción. Al revés, una
+            // ruta SIN encargado contestaba "no tiene jornada iniciada hoy, inicia la ruta primero" —
+            // un consejo imposible de seguir, porque tampoco se puede iniciar sin vendedor. Autorizar
+            // primero y trabajar después da el motivo REAL y ahorra la transacción.
+            const permisoRuta = await autorizarSobreLaRuta({
+                route, userId: req.user.id, accion: 'agregarle paradas a su jornada',
+            });
+            if (!permisoRuta.autorizado) {
+                return res.status(403).json({ success: false, status: 403, message: permisoRuta.mensaje });
+            }
+
+            const [{ hoy, ahora }] = await routes.sequelize.query(
+                `SELECT to_char((now() AT TIME ZONE :tz)::date, 'YYYY-MM-DD') AS hoy, now() AS ahora`,
+                { type: routes.sequelize.QueryTypes.SELECT, replacements: { tz } }
+            );
+
+            transaction = await routes.sequelize.transaction();
+
+            // La jornada tiene que EXISTIR. Sin ruta iniciada no hay a qué agregarle una parada,
+            // y crearla aquí sería iniciar la ruta por la puerta de atrás, saltándose el día
+            // hábil y el "un responsable por día".
+            const paradasHoy = await store_visits.findAll({
+                where: { route_id: rid, visit_day: hoy },
+                attributes: ['id', 'store_id', 'user_id'],
+                transaction,
+            });
+
+            if (paradasHoy.length === 0) {
+                await transaction.rollback();
+                return res.status(400).json({
+                    success: false, status: 400,
+                    message: 'Esta ruta no tiene jornada iniciada hoy. Inicia la ruta antes de agregar una venta ocasional.',
+                });
+            }
+
+            // Superado el candado de arriba, el encargado de la ruta ES quien pide: la parada nace
+            // a su nombre. (Una ruta sin `user_id` no llega hasta aquí —nadie puede recorrerla—,
+            // por eso no hace falta deducir el responsable contando paradas.)
+            const responsableId = route.user_id;
+
+            const store = await stores.findOne({
+                where: { id: sid, company_id: companyId },
+                attributes: ['id', 'name', 'address', 'deleted_at'],
+                transaction,
+            });
+            if (!store || store.deleted_at) {
+                await transaction.rollback();
+                return res.status(404).json({ success: false, status: 404, message: 'La tienda no existe o fue eliminada.' });
+            }
+
+            // 🔁 Idempotencia: si esa tienda ya tiene parada hoy en esta ruta, se devuelve la que
+            // hay. Pulsar dos veces no duplica ni reinicia el progreso de una parada ya visitada.
+            const existente = paradasHoy.find((p) => p.store_id === store.id);
+            if (existente) {
+                const yaEsta = await store_visits.findByPk(existente.id, { transaction });
+                await transaction.commit();
+                return res.status(200).json({
+                    success: true, status: 200, ya_existia: true,
+                    message: 'Esta tienda ya está en la jornada de hoy.',
+                    visita: await formatearParadaDelDia(yaEsta, tz),
+                });
+            }
+
+            // 🏷️ `occasional` SOLO si la tienda no pertenece a la ruta. Si es miembro y se quedó
+            // sin parada, lo que se está haciendo es un ajuste y esa parada es legítima: no
+            // necesita la protección frente a "Ajustar", y marcarla confundiría el dato.
+            const esMiembro = await routes.sequelize.models.routes_stores.count({
+                where: { route_id: rid, store_id: store.id, company_id: companyId },
+                transaction,
+            });
+
+            const fila = construirParada({
+                store,
+                route,
+                userId: responsableId,
+                userName: await nombreDelResponsable(responsableId, transaction),
+                visitDay: hoy,
+                fechaMarca: ahora,
+                visitType: esMiembro > 0 ? 'in-route' : 'occasional',
+            });
+
+            const creada = await store_visits.create(fila, { transaction });
+            await transaction.commit();
+
+            return res.status(201).json({
+                success: true,
+                status: 201,
+                ya_existia: false,
+                message: esMiembro > 0
+                    ? `${store.name} se agregó a la jornada de hoy.`
+                    : `${store.name} se agregó como venta ocasional.`,
+                visita: await formatearParadaDelDia(creada, tz),
+            });
+        } catch (error) {
+            if (transaction && !transaction.finished) await transaction.rollback();
+            console.error('❌ Error al crear la parada ocasional:', error);
+            return res.status(500).json({ success: false, status: 500, message: 'Error interno del servidor al agregar la parada.' });
         }
     },
 };

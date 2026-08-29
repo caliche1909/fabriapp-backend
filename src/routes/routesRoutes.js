@@ -100,5 +100,15 @@ router.post('/:route_id/adjustments',
     routesController.applyRouteAdjustments
 );
 
+// 🆕 Venta ocasional: agrega a la jornada de HOY una tienda que no está en la ruta (el
+// vendedor va en Norte y lo llama un tendero de Sur). Crea UNA parada 'pending' más.
+// Sin `checkPermission`: la autorización fina es por jornada dentro del controlador —owner,
+// encargado actual o `start_route_for_others`—, la misma regla de iniciar y de ajustar.
+router.post('/:route_id/occasional-visit',
+    verifyToken,
+    updateRouteLimiter,
+    routesController.createOccasionalVisit
+);
+
 module.exports = router;
 

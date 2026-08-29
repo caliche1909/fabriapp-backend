@@ -24,8 +24,12 @@
  *        medianoche de ese día en la zona de la compañía si es futura. ⚠️ No es cosmético:
  *        los reportes filtran por `(date AT TIME ZONE tz)::date`, así que estampar `now()`
  *        en una lista programada para mañana la haría aparecer HOY como visita no realizada.
+ * @param {'in-route'|'occasional'} [p.visitType='in-route']  De dónde salió la parada.
+ *        `occasional` solo para las que agrega el vendedor sobre la marcha, cuya tienda NO
+ *        pertenece a la ruta: es la marca que impide que el diagnóstico de "Ajustar" las
+ *        confunda con paradas huérfanas y las ofrezca para borrar.
  */
-const construirParada = ({ store, route, userId, userName, visitDay, fechaMarca }) => ({
+const construirParada = ({ store, route, userId, userName, visitDay, fechaMarca, visitType = 'in-route' }) => ({
     user_id: userId,
     store_id: store.id,
     route_id: route.id,
@@ -39,6 +43,7 @@ const construirParada = ({ store, route, userId, userName, visitDay, fechaMarca 
     route_name: route.name,
     sale_amount: 0.00,
     date: fechaMarca,
+    visit_type: visitType,
 });
 
 /**
@@ -94,4 +99,39 @@ const autorizarSobreLaVisita = async ({ visita, companyId, userId, transaction =
     };
 };
 
-module.exports = { construirParada, autorizarSobreLaVisita };
+/**
+ * 🔐 ¿Puede este usuario OPERAR esta ruta? Misma regla que `autorizarSobreLaVisita`, pero
+ * cuando todavía NO hay visita que autorizar —crear una parada ocasional, optimizar el
+ * recorrido— y lo único que hay es la ruta.
+ *
+ * La regla es una sola y no admite excepciones: **operar una ruta = ser su encargado actual**.
+ * Ni el owner ni `start_route_for_others` pasan por aquí. Quien quiera operarla tiene que
+ * asignársela, que es exactamente el mecanismo del relevo: así la jornada siempre tiene un
+ * dueño único y nunca hay dos personas moviéndola a la vez. Ver o iniciar es otra cosa y se
+ * gobierna aparte.
+ *
+ * @param {object}  route   Ruta ya cargada (necesita `user_id`).
+ * @param {string}  userId  Usuario que pide la acción.
+ * @param {string}  accion  Cómo se nombra la acción en el 403 ("operarla", "optimizar el recorrido"…).
+ * @returns {Promise<{autorizado: boolean, mensaje: string|null}>}
+ */
+const autorizarSobreLaRuta = async ({ route, userId, accion = 'operarla', transaction = null }) => {
+    const { users } = require('../models');
+
+    if (!route.user_id) {
+        return { autorizado: false, mensaje: 'Esta ruta no tiene un encargado asignado, así que nadie puede recorrerla.' };
+    }
+    if (route.user_id === userId) {
+        return { autorizado: true, mensaje: null };
+    }
+
+    const encargado = await users.findByPk(route.user_id, { attributes: ['first_name', 'last_name'], transaction });
+    const nombre = encargado ? `${encargado.first_name} ${encargado.last_name}`.trim() : 'otro vendedor';
+    return {
+        autorizado: false,
+        mensaje: `Esta ruta está a cargo de ${nombre}. Solo su encargado actual puede ${accion}. `
+            + 'Para hacerlo tú, asígnate la ruta.',
+    };
+};
+
+module.exports = { construirParada, autorizarSobreLaVisita, autorizarSobreLaRuta };

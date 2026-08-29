@@ -853,12 +853,51 @@ module.exports = {
                 return storeData;
             });
 
+            // 📊 Resumen de la JORNADA de hoy, para el anillo de progreso de la ruta.
+            //
+            // Se calcula sobre `todayVisits`, que YA está en memoria (se cargó arriba para proyectar
+            // `current_visit_status`): es un recorrido de un array de unas decenas de elementos,
+            // sin una sola consulta extra ni una petición extra.
+            //
+            // ❗ Por qué hace falta: el anillo se calculaba sobre las TARJETAS, que son la membresía
+            // de la ruta (`routes_stores`). Una parada **ocasional** no es miembro —a propósito, si no
+            // la tienda quedaría en la ruta para siempre— así que era invisible: con 45 miembros y una
+            // ocasional pendiente, el anillo decía "45/45, 100 %" con una parada sin hacer.
+            //
+            // `ocasionales` es el DELTA que el cliente no puede deducir por su cuenta: las tarjetas le
+            // dan la parte de miembros (y viva, porque se parchea al marcar y vender), y esto le da lo
+            // que le falta. `total`/`completadas` van también por si se quiere el conteo entero.
+            const resumenJornada = {
+                iniciada: hayJornadaHoy,
+                total: todayVisits.length,
+                completadas: 0,
+                visitadas: 0,
+                pendientes: 0,
+                ocasionales: { total: 0, completadas: 0 },
+            };
+            const idsMiembros = new Set(formattedStores.map((s) => s.id));
+            for (const v of todayVisits) {
+                if (v.status === 'completed') resumenJornada.completadas += 1;
+                else if (v.status === 'visited') resumenJornada.visitadas += 1;
+                else resumenJornada.pendientes += 1;
+
+                // Ocasional = parada del día cuya tienda NO está en la membresía de la ruta. Se
+                // deduce así —y no por `visit_type`— porque lo que el cliente necesita es justo
+                // "lo que no ves en las tarjetas", que incluye también la parada de una tienda
+                // retirada de la ruta con la jornada ya abierta.
+                if (!idsMiembros.has(v.store_id)) {
+                    resumenJornada.ocasionales.total += 1;
+                    if (v.status === 'completed') resumenJornada.ocasionales.completadas += 1;
+                }
+            }
+
             // ✅ Devolver respuesta con estructura consistente
             return res.status(200).json({
                 success: true,
                 status: 200,
                 message: `Se encontraron ${formattedStores.length} tiendas en la ruta`,
-                stores: formattedStores
+                stores: formattedStores,
+                jornada: resumenJornada
             });
 
         } catch (error) {
@@ -1363,7 +1402,13 @@ module.exports = {
                 });
             }
 
-            // Ruta en cuyo contexto se marca la visita: la envía el frontend en el body.
+            // Identificación de la parada que se está cerrando, de más precisa a menos:
+            //   1. `visit_id` — la parada exacta. Es como ya trabajan `createSale` y el reporte
+            //      de no-venta, que la reciben y no adivinan nada.
+            //   2. `route_id` — la ruta en cuyo contexto se marca (desambigua la M2M).
+            // Se aceptan las dos por compatibilidad: el frontend y el backend se despliegan por
+            // separado, y una pestaña abierta con el JS viejo solo manda `route_id`.
+            const bodyVisitId = req.body.visit_id ? parseInt(req.body.visit_id) : null;
             const bodyRouteId = req.body.route_id ? parseInt(req.body.route_id) : null;
 
             // Día hábil del negocio (zona horaria de la compañía, Capa B).
@@ -1384,10 +1429,47 @@ module.exports = {
             // donde quedó, incluso sobre paradas que el anterior ya dejó en 'visited'.
             // ⚠️ NO se crean visitas ad-hoc: si la tienda no tiene parada hoy se rechaza (la
             //    ruta debe iniciarse primero, o ajustarse con el botón "Ajustar").
-            const visitWhere = { store_id: store.id, visit_day: hoy };
-            if (bodyRouteId) visitWhere.route_id = bodyRouteId;
+            // 🔴 Una tienda puede estar en VARIAS rutas a la vez (la M2M es intencional), así que
+            //    "la parada de esta tienda hoy" puede no ser una sola. Esto era un `findOne` sin
+            //    orden: con dos jornadas abiertas cerraba UNA CUALQUIERA, posiblemente la de la
+            //    otra ruta, y el fallo era mudo (la ruta recorrida quedaba pendiente y la otra
+            //    visitada sin que nadie fuera). Ahora, o se recibe la parada exacta, o se exige
+            //    que la búsqueda dé un único resultado.
+            let visitRecord = null;
 
-            const visitRecord = await store_visits.findOne({ where: visitWhere, transaction });
+            if (bodyVisitId) {
+                // Camino preciso. Se revalida contra tienda y día para que el id de otra tienda
+                // —o de una jornada vieja que el navegador tenga en caché— no sirva de atajo.
+                visitRecord = await store_visits.findOne({
+                    where: { id: bodyVisitId, store_id: store.id, visit_day: hoy },
+                    transaction,
+                });
+
+                if (!visitRecord) {
+                    await transaction.rollback();
+                    return res.status(409).json({
+                        success: false,
+                        status: 409,
+                        message: 'La visita indicada no corresponde a esta tienda para hoy. Recarga la ruta e inténtalo de nuevo.',
+                    });
+                }
+            } else {
+                const visitWhere = { store_id: store.id, visit_day: hoy };
+                if (bodyRouteId) visitWhere.route_id = bodyRouteId;
+
+                const candidatas = await store_visits.findAll({ where: visitWhere, transaction });
+
+                if (candidatas.length > 1) {
+                    await transaction.rollback();
+                    return res.status(409).json({
+                        success: false,
+                        status: 409,
+                        message: 'Esta tienda está programada hoy en varias rutas. Ábrela desde la ruta que estás recorriendo para poder marcarla.',
+                    });
+                }
+
+                visitRecord = candidatas[0] || null;
+            }
 
             if (!visitRecord) {
                 await transaction.rollback();

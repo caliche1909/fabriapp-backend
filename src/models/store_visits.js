@@ -129,6 +129,16 @@ module.exports = function (sequelize, DataTypes) {
       type: DataTypes.INTEGER,
       allowNull: true,
       comment: 'Orden del recorrido optimizado del día (solo pendientes; NULL = sin orden)'
+    },
+    visit_type: {
+      type: DataTypes.ENUM('in-route', 'occasional'),
+      allowNull: false,
+      defaultValue: 'in-route',
+      // 'in-route'   → nació de la membresía de la ruta (iniciar jornada o ajuste).
+      // 'occasional' → la agregó el vendedor sobre la marcha para una venta ocasional; su
+      //                tienda NO pertenece a la ruta, y esta marca es lo que impide que el
+      //                diagnóstico de "Ajustar" la confunda con una parada huérfana y la borre.
+      comment: 'Origen de la parada: in-route (nació de la ruta) | occasional (venta ocasional)'
     }
   }, {
     sequelize,
