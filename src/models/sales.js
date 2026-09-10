@@ -100,6 +100,34 @@ module.exports = function (sequelize, DataTypes) {
       validate: {
         isIn: [['pending', 'processing', 'completed', 'pending_payment', 'voided']]
       }
+    },
+    // 🔁 Idempotencia. El cliente genera un UUID por operación y lo repite en cada reintento;
+    // un índice único PARCIAL (solo las filas con valor) impide que el mismo UUID cree dos ventas.
+    // ⚠️ Este modelo es `paranoid`: al buscar por este campo hay que usar `paranoid: false`, o una
+    // venta ANULADA no aparecería en la búsqueda y el INSERT chocaría contra el índice con un 500.
+    client_operation_id: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      comment: 'UUID de la operación en el cliente (idempotencia). NULL = venta anterior a la sincronización offline.'
+    },
+    // 🕗 Solo si la venta NO llegó en vivo. La fecha de NEGOCIO es `sale_date` (la que filtran los
+    // reportes); esta dice cuándo la recibió el servidor, para poder explicar por qué un Cuadre ya
+    // revisado cambió de número.
+    synced_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      comment: 'Cuándo llegó al servidor si venía de la cola offline. NULL = se registró en el momento.'
+    },
+    // 🧾 Venta APARTADA: llegó cuando ya no cabía (la parada se cerró con no compra, reasignaron la
+    // ruta...). Se guarda igual —el vendedor ya cobró— pero nace con `deleted_at` puesto, así que
+    // TODAS las lecturas la excluyen sin tener que acordarse de nada.
+    //
+    // ⚠️ Va SIEMPRE junto a `deleted_at`. Es además lo que la distingue de una venta anulada por
+    // una persona: aquella tendrá `conflict_reason` en NULL. Ver OFFLINE-CAMPO.md §11.
+    conflict_reason: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      comment: 'Motivo por el que la venta quedó apartada. NULL = venta normal.'
     }
   }, {
     sequelize,

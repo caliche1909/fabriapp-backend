@@ -265,6 +265,67 @@ module.exports = {
      * 📌 GET /api/sales/list?from&to&store_id&user_id&payment_method_id&page&limit
      * Historial de ventas paginado con nombres de tienda, vendedor y método de pago.
      */
+    /**
+     * 🧾 GET /api/sales/reports/conflicts — VENTAS CON CONFLICTO.
+     *
+     * Ventas que llegaron al servidor cuando ya no cabían (la parada se había cerrado con un
+     * reporte de no compra, reasignaron la ruta...). Se guardan igual —el vendedor ya había
+     * cobrado— pero **apartadas**: nacen con `deleted_at`, así que todas las demás consultas las
+     * excluyen. Ver `OFFLINE-CAMPO.md` §11.
+     *
+     * 🔴 SIN FILTRO DE FECHA, Y NO ES UN OLVIDO. Esto **no es un informe, es una lista de tareas**.
+     * Si se filtrara por el rango del historial, la venta de hace tres semanas que nadie ha
+     * resuelto desaparecería justo cuando el supervisor mira "esta semana" — y es precisamente la
+     * más urgente. Por eso también van **las más viejas primero**.
+     *
+     * 🔴 SE FILTRA POR `conflict_reason IS NOT NULL`, no por `deleted_by IS NULL`. Las dos cosas
+     * son ciertas hoy (el gancho `beforeDestroy` del modelo exige un `userId`, así que un borrado
+     * humano siempre deja `deleted_by`), pero una afirmación positiva es más difícil de romper que
+     * una ausencia: `conflict_reason` solo puede estar puesto porque lo pusimos nosotros.
+     */
+    async getConflictSales(req, res) {
+        try {
+            const cid = req.user.companyId;
+            const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 100));
+
+            const [count] = await sequelize.query(
+                `SELECT COUNT(*)::int AS total
+                   FROM sales sa
+                  WHERE sa.company_id = :cid AND sa.conflict_reason IS NOT NULL`,
+                { type: QueryTypes.SELECT, replacements: { cid } }
+            );
+
+            const rows = await sequelize.query(
+                `SELECT sa.id, sa.sale_date, sa.total_amount::float8, sa.conflict_reason,
+                        sa.synced_at, sa.created_at,
+                        st.name AS store_name,
+                        TRIM(u.first_name || ' ' || COALESCE(u.last_name, '')) AS user_name,
+                        pm.name AS payment_method_name,
+                        (SELECT COUNT(*)::int FROM sale_items si WHERE si.sale_id = sa.id) AS item_count
+                   FROM sales sa
+                   JOIN stores st ON st.id = sa.store_id
+                   JOIN users u ON u.id = sa.user_id
+                   JOIN payment_methods pm ON pm.id = sa.payment_method_id
+                  WHERE sa.company_id = :cid AND sa.conflict_reason IS NOT NULL
+                  ORDER BY sa.sale_date ASC
+                  LIMIT :limit`,
+                { type: QueryTypes.SELECT, replacements: { cid, limit } }
+            );
+
+            return res.status(200).json({
+                success: true,
+                data: rows,
+                // `total` puede ser mayor que `data.length` si se llegó al tope. La interfaz lo
+                // dice en vez de fingir que están todas.
+                total: count ? count.total : 0,
+                limit,
+            });
+        } catch (error) {
+            console.error('Error en getConflictSales (ventas con conflicto):', error);
+            return res.status(500).json({ success: false, message: 'Error al obtener las ventas con conflicto' });
+        }
+    },
+
     async getSalesList(req, res) {
         try {
             const cid = req.user.companyId;

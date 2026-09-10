@@ -1,5 +1,8 @@
 const { store_no_sale_reports, stores, store_visits, sales } = require('../models');
 const { autorizarSobreLaVisita } = require('../utils/storeVisits');
+const {
+    CODIGOS, leerCamposDeSincronizacion, buscarOperacionPrevia, esChoqueDeIdempotencia,
+} = require('../utils/sincronizacion');
 const { ValidationError, ForeignKeyConstraintError } = require('sequelize');
 
 
@@ -10,6 +13,38 @@ const StoreNoSaleReportsController = {
     // consulta/detalle de reportes vive en el módulo de sales (getNoSaleReport +
     // getNoSaleReportDetail), scopeado por compañía y con checkPermission('view_reports').
     async createNoSaleReport(req, res) {
+        const user_id = req.user.id;
+        const company_id = req.user.companyId;
+
+        // 🔁 CONTRATO DE SINCRONIZACIÓN — se resuelve ANTES de abrir la transacción.
+        //
+        // Aquí ya existía media protección: `idx_unique_visit_report` impide dos reportes para la
+        // misma visita. Pero eso responde 409 sin distinguir "es mi propio reintento" de "otro lo
+        // reportó", y la cola de reenvío necesita saber cuál de las dos cosas pasó.
+        const sync = leerCamposDeSincronizacion(req.body);
+        if (!sync.ok) {
+            return res.status(400).json({
+                success: false, status: 400, code: CODIGOS.DATOS_INVALIDOS, message: sync.message,
+            });
+        }
+
+        if (sync.clientOperationId) {
+            const previa = await buscarOperacionPrevia(store_no_sale_reports, sync.clientOperationId);
+            if (previa) {
+                if (previa.company_id !== company_id) {
+                    return res.status(409).json({
+                        success: false, status: 409, code: CODIGOS.DATOS_INVALIDOS,
+                        message: 'Ese identificador de operación ya se usó en otra compañía.',
+                    });
+                }
+                return res.status(200).json({
+                    success: true, status: 200, code: CODIGOS.YA_REGISTRADO,
+                    message: 'Este reporte de no compra ya estaba registrado.',
+                    data: { id: previa.id, visit_id: previa.visit_id },
+                });
+            }
+        }
+
         // 🔄 Iniciar transacción para garantizar consistencia
         const transaction = await store_no_sale_reports.sequelize.transaction();
 
@@ -24,10 +59,6 @@ const StoreNoSaleReportsController = {
                 client_name,
                 client_phone
             } = req.body;
-
-            // 🎯 Obtener user_id y company_id del token JWT
-            const user_id = req.user.id;
-            const company_id = req.user.companyId;
 
             // Validar campos requeridos
             if (!store_id || !user_id || !company_id || !category_id || !reason_id || !comments) {
@@ -72,7 +103,7 @@ const StoreNoSaleReportsController = {
             });
             if (!permiso.autorizado) {
                 await transaction.rollback();
-                return res.status(403).json({ success: false, status: 403, message: permiso.mensaje });
+                return res.status(403).json({ success: false, status: 403, code: CODIGOS.NO_ES_ENCARGADO, message: permiso.mensaje });
             }
 
             // Verificar que no exista un reporte para la misma visita (si se proporciona visit_id)
@@ -84,9 +115,13 @@ const StoreNoSaleReportsController = {
 
                 if (existingReport) {
                     await transaction.rollback();
+                    // Para la cola de reenvío esto es un ÉXITO: la visita ya quedó cerrada como
+                    // no-venta, que era el objetivo. Se separa de `YA_REGISTRADO` porque allí el
+                    // reporte es literalmente el nuestro; aquí lo hizo otra operación.
                     return res.status(409).json({
                         success: false,
                         status: 409,
+                        code: CODIGOS.NO_VENTA_YA_REGISTRADA,
                         message: 'Ya existe un reporte de NO VENTA para esta visita'
                     });
                 }
@@ -101,9 +136,12 @@ const StoreNoSaleReportsController = {
 
                 if (existingSale) {
                     await transaction.rollback();
+                    // Este SÍ es un rechazo real: la parada se cerró con VENTA, no con no-venta.
+                    // La cola no debe reintentarlo; hay que contárselo al vendedor.
                     return res.status(409).json({
                         success: false,
                         status: 409,
+                        code: CODIGOS.VENTA_YA_REGISTRADA,
                         message: 'Ya se registró una venta para esta visita.'
                     });
                 }
@@ -122,7 +160,17 @@ const StoreNoSaleReportsController = {
                 reason_id,
                 comments: comments.trim(),
                 client_name: client_name ? client_name.trim() : null,
-                client_phone: client_phone ? client_phone.trim() : null
+                client_phone: client_phone ? client_phone.trim() : null,
+
+                // 🔁 Sincronización. Aquí `created_at` ES la fecha de negocio: los reportes de
+                // no-venta se filtran por `(r.created_at AT TIME ZONE :tz)::date`. Por eso se
+                // sobrescribe con la hora que declara el cliente, y por eso `synced_at` es
+                // imprescindible: es el único rastro que queda de que la fila entró en diferido.
+                // (A diferencia de `sales`, este modelo SÍ declara `created_at` como atributo
+                // explícito, así que Sequelize respeta el valor.)
+                ...(sync.occurredAt ? { created_at: sync.occurredAt } : {}),
+                client_operation_id: sync.clientOperationId,
+                synced_at: sync.syncedAt,
             }, { transaction });
 
             // (D4) Tras el reporte de no-venta la visita se CONCLUYE como 'completed'
@@ -148,6 +196,20 @@ const StoreNoSaleReportsController = {
         } catch (error) {
             // 🔄 Revertir la transacción en caso de error
             await transaction.rollback();
+
+            // 🔁 Carrera de idempotencia (dos envíos simultáneos con el mismo uuid). La relectura
+            // va después del rollback: en Postgres una sentencia fallida aborta la transacción.
+            if (esChoqueDeIdempotencia(error) && sync.clientOperationId) {
+                const previa = await buscarOperacionPrevia(store_no_sale_reports, sync.clientOperationId);
+                if (previa) {
+                    return res.status(200).json({
+                        success: true, status: 200, code: CODIGOS.YA_REGISTRADO,
+                        message: 'Este reporte de no compra ya estaba registrado.',
+                        data: { id: previa.id, visit_id: previa.visit_id },
+                    });
+                }
+            }
+
             console.error('Error al crear reporte de no-venta:', error);
 
             if (error instanceof ValidationError) {

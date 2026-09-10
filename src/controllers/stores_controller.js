@@ -1,9 +1,22 @@
 const { stores, users, store_visits, roles } = require('../models');
 const { autorizarSobreLaVisita } = require('../utils/storeVisits');
+const {
+    CODIGOS, leerCamposDeSincronizacion, buscarOperacionPrevia, esChoqueDeIdempotencia,
+} = require('../utils/sincronizacion');
 const { Op } = require('sequelize'); // ✅ Importar Op de Sequelize
 const bcrypt = require('bcrypt');
 
 const SALT_ROUNDS = 10;
+
+/**
+ * Cuántos días atrás puede estar la jornada que un marcado en diferido dice cerrar.
+ *
+ * Cubre de sobra el caso real —salir a las 5 a.m. y sincronizar al día siguiente, o un teléfono que
+ * pasó la noche apagado— sin dejar que un `visit_id` viejo del cache del navegador reabra una
+ * parada del histórico. Más allá de esto no se descarta el trabajo en silencio: se rechaza con un
+ * mensaje que le dice al vendedor que hable con su supervisor.
+ */
+const MAX_DIAS_ATRAS_JORNADA = 2;
 
 module.exports = {
 
@@ -1357,10 +1370,23 @@ module.exports = {
     // 📌 Método para actualizar una tienda como visitada
     async updateStoreAsVisited(req, res) {
         let transaction = null;
+        // Declarado fuera del try porque el `catch` lo necesita para resolver la carrera de
+        // idempotencia (ver el final de la función).
+        let sync = { ok: true, clientOperationId: null, occurredAt: null, syncedAt: null, visitDay: null };
         try {
             const { store_id } = req.params;
             const { distance } = req.body;
             const user_id = req.user.id;
+
+            // 🔁 Contrato de sincronización (todo opcional; ver utils/sincronizacion.js).
+            // Sin estos campos el endpoint se comporta EXACTAMENTE como siempre, que es lo que
+            // permite desplegar este backend antes que el frontend que los manda.
+            sync = leerCamposDeSincronizacion(req.body);
+            if (!sync.ok) {
+                return res.status(400).json({
+                    success: false, status: 400, code: CODIGOS.DATOS_INVALIDOS, message: sync.message,
+                });
+            }
 
             // 🔍 VALIDACIONES (optimizadas y concisas)
             if (!store_id || distance === undefined || distance === null) {
@@ -1402,6 +1428,30 @@ module.exports = {
                 });
             }
 
+            // 🔁 IDEMPOTENCIA. ¿Ya procesamos esta misma operación? Pasa cuando el marcado llegó,
+            // se guardó, y la RESPUESTA se perdió (mala cobertura, timeout del cliente): la cola
+            // reintenta con el MISMO uuid. Se responde 200 con lo que ya existe en vez de un 409
+            // que la cola tendría que interpretar.
+            // Se comprueba después de validar la tienda para no filtrar nada de otra compañía, y
+            // se exige que la operación previa sea de ESTA tienda: si no, el cliente reutilizó un
+            // uuid para dos cosas distintas, y eso es un error suyo que hay que hacer visible.
+            if (sync.clientOperationId) {
+                const previa = await buscarOperacionPrevia(store_visits, sync.clientOperationId);
+                if (previa) {
+                    if (previa.store_id !== store.id) {
+                        return res.status(409).json({
+                            success: false, status: 409, code: CODIGOS.DATOS_INVALIDOS,
+                            message: 'Ese identificador de operación ya se usó para otra tienda.',
+                        });
+                    }
+                    return res.status(200).json({
+                        success: true, status: 200, code: CODIGOS.YA_REGISTRADO,
+                        message: 'Esta visita ya estaba registrada.',
+                        store_visit_id: previa.id,
+                    });
+                }
+            }
+
             // Identificación de la parada que se está cerrando, de más precisa a menos:
             //   1. `visit_id` — la parada exacta. Es como ya trabajan `createSale` y el reporte
             //      de no-venta, que la reciben y no adivinan nada.
@@ -1412,11 +1462,36 @@ module.exports = {
             const bodyRouteId = req.body.route_id ? parseInt(req.body.route_id) : null;
 
             // Día hábil del negocio (zona horaria de la compañía, Capa B).
+            //
+            // 🔴 Este `hoy` era el problema del trabajo offline: se calcula EN EL MOMENTO DE LA
+            // PETICIÓN, así que sincronizar a las 00:30 —el vendedor volvió tarde y el teléfono se
+            // enganchó al wifi de casa— rechazaba la jornada ENTERA, porque ninguna parada de ayer
+            // coincide con el "hoy" de ahora.
+            //
+            // Solución: el cliente puede declarar a qué **día de negocio** pertenece el trabajo
+            // (`visit_day`), capturado cuando lo hizo. No se acepta cualquier fecha: se acota a los
+            // últimos días. Esa cota no es burocracia — protege lo que protegía el filtro original:
+            // que un `visit_id` viejo, cacheado en el navegador, cierre una parada del histórico.
+            // Es una ventana distinta de la de `occurred_at` a propósito: aquella acota la HORA que
+            // se estampa; esta acota A QUÉ JORNADA se puede tocar, y esa tiene que ser más estricta.
             const tz = req.user?.companyTimezone || 'America/Bogota';
-            const [{ hoy }] = await stores.sequelize.query(
-                `SELECT (now() AT TIME ZONE :tz)::date AS hoy`,
-                { type: stores.sequelize.QueryTypes.SELECT, replacements: { tz } }
+            const [{ hoy, dia_objetivo, dias_atras }] = await stores.sequelize.query(
+                `SELECT to_char((now() AT TIME ZONE :tz)::date, 'YYYY-MM-DD') AS hoy,
+                        to_char(COALESCE(CAST(:visitDay AS date), (now() AT TIME ZONE :tz)::date), 'YYYY-MM-DD') AS dia_objetivo,
+                        ((now() AT TIME ZONE :tz)::date
+                         - COALESCE(CAST(:visitDay AS date), (now() AT TIME ZONE :tz)::date)) AS dias_atras`,
+                { type: stores.sequelize.QueryTypes.SELECT, replacements: { tz, visitDay: sync.visitDay } }
             );
+
+            const atras = Number(dias_atras);
+            if (atras < 0 || atras > MAX_DIAS_ATRAS_JORNADA) {
+                return res.status(400).json({
+                    success: false, status: 400, code: CODIGOS.DATOS_INVALIDOS,
+                    message: atras < 0
+                        ? 'No se puede registrar una visita en una fecha futura.'
+                        : `Esta visita es de hace ${atras} días y ya no se puede registrar. Repórtalo a tu supervisor.`,
+                });
+            }
 
             transaction = await stores.sequelize.transaction();
 
@@ -1437,11 +1512,15 @@ module.exports = {
             //    que la búsqueda dé un único resultado.
             let visitRecord = null;
 
+            // `dia_objetivo` es HOY salvo que el cliente declare la jornada a la que pertenece el
+            // trabajo (marcado en diferido, ya acotado arriba). El resto de la lógica no cambia.
+            const esDeHoy = dia_objetivo === hoy;
+
             if (bodyVisitId) {
                 // Camino preciso. Se revalida contra tienda y día para que el id de otra tienda
                 // —o de una jornada vieja que el navegador tenga en caché— no sirva de atajo.
                 visitRecord = await store_visits.findOne({
-                    where: { id: bodyVisitId, store_id: store.id, visit_day: hoy },
+                    where: { id: bodyVisitId, store_id: store.id, visit_day: dia_objetivo },
                     transaction,
                 });
 
@@ -1450,11 +1529,14 @@ module.exports = {
                     return res.status(409).json({
                         success: false,
                         status: 409,
-                        message: 'La visita indicada no corresponde a esta tienda para hoy. Recarga la ruta e inténtalo de nuevo.',
+                        code: CODIGOS.VISITA_NO_EXISTE,
+                        message: esDeHoy
+                            ? 'La visita indicada no corresponde a esta tienda para hoy. Recarga la ruta e inténtalo de nuevo.'
+                            : `La visita indicada no corresponde a esta tienda para el ${dia_objetivo}.`,
                     });
                 }
             } else {
-                const visitWhere = { store_id: store.id, visit_day: hoy };
+                const visitWhere = { store_id: store.id, visit_day: dia_objetivo };
                 if (bodyRouteId) visitWhere.route_id = bodyRouteId;
 
                 const candidatas = await store_visits.findAll({ where: visitWhere, transaction });
@@ -1464,6 +1546,7 @@ module.exports = {
                     return res.status(409).json({
                         success: false,
                         status: 409,
+                        code: CODIGOS.DATOS_INVALIDOS,
                         message: 'Esta tienda está programada hoy en varias rutas. Ábrela desde la ruta que estás recorriendo para poder marcarla.',
                     });
                 }
@@ -1476,7 +1559,10 @@ module.exports = {
                 return res.status(409).json({
                     success: false,
                     status: 409,
-                    message: 'Esta tienda no tiene visitas pendientes para el día de hoy. Primero debes iniciar la ruta.',
+                    code: CODIGOS.VISITA_NO_EXISTE,
+                    message: esDeHoy
+                        ? 'Esta tienda no tiene visitas pendientes para el día de hoy. Primero debes iniciar la ruta.'
+                        : `Esta tienda no tenía una visita programada el ${dia_objetivo}.`,
                 });
             }
 
@@ -1486,14 +1572,22 @@ module.exports = {
             });
             if (!permiso.autorizado) {
                 await transaction.rollback();
-                return res.status(403).json({ success: false, status: 403, message: permiso.mensaje });
+                return res.status(403).json({
+                    success: false, status: 403, code: CODIGOS.NO_ES_ENCARGADO, message: permiso.mensaje,
+                });
             }
 
             if (visitRecord.status === 'visited' || visitRecord.status === 'completed') {
                 await transaction.rollback();
+                // Para la cola de reenvío esto NO es un fallo: la parada está cerrada, que es el
+                // objetivo. `VISITA_YA_CERRADA` es su señal de "date por satisfecha y sigue".
+                // Se distingue de `YA_REGISTRADO` a propósito: aquí la cerró OTRA operación (otro
+                // vendedor tras un relevo, o un envío nuestro anterior sin uuid), así que la hora y
+                // la distancia que traíamos NO son las que quedaron guardadas.
                 return res.status(409).json({
                     success: false,
                     status: 409,
+                    code: CODIGOS.VISITA_YA_CERRADA,
                     message: 'Esta tienda ya fue visitada hoy',
                 });
             }
@@ -1508,7 +1602,12 @@ module.exports = {
 
             visitRecord.status = 'visited';
             visitRecord.distance = parsedDistance;
-            visitRecord.arrived_at = new Date();
+            // 🕗 La hora de llegada es la que declara el cliente si la manda (ya acotada a una
+            // ventana razonable). Sin esto, sincronizar en lote dejaría las 14 paradas del día a
+            // la misma hora de la tarde y se perdería la traza real del recorrido.
+            visitRecord.arrived_at = sync.occurredAt || new Date();
+            visitRecord.client_operation_id = sync.clientOperationId;
+            visitRecord.synced_at = sync.syncedAt;
             visitRecord.user_id = user_id;
             if (actor) visitRecord.user_name = `${actor.first_name} ${actor.last_name}`.trim();
             await visitRecord.save({ transaction });
@@ -1526,6 +1625,21 @@ module.exports = {
             // ✅ ROLLBACK MEJORADO - verifica si la transacción ya finalizó
             if (transaction && !transaction.finished) {
                 await transaction.rollback();
+            }
+
+            // 🔁 Carrera de dos peticiones idénticas simultáneas: el SELECT de idempedencia no vio
+            // a la otra porque aún no había hecho commit, y el índice único frenó a la segunda.
+            // La relectura va DESPUÉS del rollback y fuera de la transacción abortada: en Postgres,
+            // una sentencia fallida invalida la transacción entera.
+            if (esChoqueDeIdempotencia(error) && sync.clientOperationId) {
+                const previa = await buscarOperacionPrevia(store_visits, sync.clientOperationId);
+                if (previa) {
+                    return res.status(200).json({
+                        success: true, status: 200, code: CODIGOS.YA_REGISTRADO,
+                        message: 'Esta visita ya estaba registrada.',
+                        store_visit_id: previa.id,
+                    });
+                }
             }
 
             console.error('Error en updateStoreAsVisited:', error);

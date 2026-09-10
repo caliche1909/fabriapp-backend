@@ -139,6 +139,21 @@ module.exports = function (sequelize, DataTypes) {
       //                tienda NO pertenece a la ruta, y esta marca es lo que impide que el
       //                diagnóstico de "Ajustar" la confunda con una parada huérfana y la borre.
       comment: 'Origen de la parada: in-route (nació de la ruta) | occasional (venta ocasional)'
+    },
+    // 🔁 Idempotencia del MARCADO. La parada la crea `startRoute`; este campo identifica la
+    // operación del cliente que la pasó de 'pending' a 'visited', para que un reintento no se
+    // confunda con "otra persona la cerró" (que también responde 409, pero significa otra cosa).
+    client_operation_id: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      comment: 'UUID de la operación del cliente que marcó la parada (idempotencia). NULL = marcada en vivo o antes del offline.'
+    },
+    // 🕗 Ojo: `created_at` aquí es la hora en que se INICIÓ LA RUTA (la parada nace ahí), no la del
+    // marcado. Por eso hace falta esta columna para saber qué se marcó en diferido.
+    synced_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      comment: 'Cuándo llegó el marcado al servidor si venía de la cola offline. NULL = en vivo.'
     }
   }, {
     sequelize,

@@ -171,6 +171,20 @@ router.get('/list',
     salesReportsController.getSalesList
 );
 
+/**
+ * @route   GET /api/sales/reports/conflicts
+ * @desc    Ventas con conflicto: llegaron cuando ya no cabían y se guardaron apartadas.
+ *          SIN filtro de fecha a propósito — es una lista de tareas, no un informe.
+ * @query   limit? (máx. 200)
+ * @access  Privado — permiso 'view_sales_history' (mismo que el historial: son ventas)
+ */
+router.get('/reports/conflicts',
+    verifyToken,
+    reportsLimiter,
+    checkPermission('view_sales_history'),
+    salesReportsController.getConflictSales
+);
+
 
 
 module.exports = router;

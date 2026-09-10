@@ -107,6 +107,23 @@ const formatearParadaDelDia = async (visita, tz) => {
         longitude: tienda?.longitude != null ? Number(tienda.longitude) : null,
         estado,
         abre_a,
+        // 🕗 Los horarios EN CRUDO, además del veredicto ya calculado.
+        //
+        // `estado` y `abre_a` se resuelven aquí arriba comparando contra `now()`, así que son un
+        // dato con fecha de caducidad: valen para la respuesta de este instante. En cuanto la
+        // jornada se guarde en el navegador para trabajar sin conexión, ese veredicto quedaría
+        // **congelado a la hora de iniciar la ruta** — una tienda que abre a las 9 diría "abre más
+        // tarde" a las 4 de la tarde, y el cajón de visitas, que ORDENA por ese campo, dejaría la
+        // lista clavada al amanecer.
+        //
+        // Con las ventanas horarias crudas el cliente recalcula el estado con la hora actual
+        // (misma lógica portada de `utils/routeOptimization`: parseWindows + classify). Es la
+        // misma decisión que ya tomamos con el día hábil en `client/src/utils/diaHabil.ts`:
+        // el servidor manda el dato, el cliente saca la conclusión.
+        //
+        // Aditivo: quien no los use ve exactamente lo mismo que antes.
+        opening_time: tienda?.opening_time ?? null,
+        closing_time: tienda?.closing_time ?? null,
     };
 };
 
@@ -1389,6 +1406,23 @@ module.exports = {
                     longitude: v['store.longitude'] !== undefined && v['store.longitude'] !== null ? Number(v['store.longitude']) : null,
                     estado,
                     abre_a,
+                    // 🕗 Los horarios EN CRUDO, además del veredicto ya calculado.
+                    //
+                    // `estado` y `abre_a` se resuelven arriba comparando contra la hora de ESTA
+                    // petición, así que son un dato con fecha de caducidad. En cuanto la jornada se
+                    // guarde en el navegador para trabajar sin conexión, ese veredicto quedaría
+                    // **congelado a la hora de iniciar la ruta**: una tienda que abre a las 9
+                    // seguiría diciendo "abre más tarde" a las 4 de la tarde. Y como la lista se
+                    // ORDENA por ese campo (ver `rangoHorario` justo abajo, y `horarioRank` en el
+                    // cliente), el orden entero se quedaría clavado al amanecer.
+                    //
+                    // Con las ventanas crudas el cliente recalcula el estado con la hora actual,
+                    // portando `parseWindows`/`classify` de `utils/routeOptimization` (funciones
+                    // puras, sin BD). Es la misma decisión que ya tomamos con el día hábil en
+                    // `client/src/utils/diaHabil.ts`: el servidor manda el dato, el cliente saca la
+                    // conclusión. Ya venían en el SELECT, así que no cuesta ni una consulta más.
+                    opening_time: v['store.opening_time'] ?? null,
+                    closing_time: v['store.closing_time'] ?? null,
                 };
             });
 

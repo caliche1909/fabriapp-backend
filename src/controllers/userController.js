@@ -7,6 +7,33 @@ const { sendWelcomeEmail } = require('../utils/emailNotifier');
 const SALT_ROUNDS = 10;
 const SECRET_KEY = process.env.JWT_SECRET;
 
+/**
+ * ⏱️ Cuánto dura el token de SESIÓN.
+ *
+ * Era `8h`, y se quedaba corto **ya hoy, sin nada de trabajo offline**. Medido sobre las 516
+ * jornadas reales de producción (por vendedor y día, contando solo las horas entre su primera y su
+ * última venta): promedio 7,6 h, máxima 10,9 h, y **223 de esas 516 jornadas (el 43 %) pasan de las
+ * 8 h**. Y eso sin contar el login, iniciar la ruta y el trayecto a la primera tienda por delante,
+ * ni el regreso por detrás. Es decir: a casi la mitad de los vendedores se les caía la sesión a
+ * media ruta y tenían que volver a entrar.
+ *
+ * Con la cola de envíos offline (ver `OFFLINE-CAMPO.md`) eso deja de ser una molestia y pasa a ser
+ * pérdida de dinero: al expirar el token, el trabajo pendiente se queda sin credenciales con las
+ * que enviarse.
+ *
+ * 🔐 Por qué alargarlo NO abre un agujero: `jwt.middleware.js` revalida la fila de `user_companies`
+ * (con `status: 'active'`) **en cada petición**. Desactivar a alguien le corta el acceso al
+ * instante, dure lo que dure su token. El token nunca fue la única puerta.
+ *
+ * ⚠️ Lo que sigue siendo cierto —antes con 8 h y ahora con 16— es que **cambiar la contraseña no
+ * invalida los tokens ya emitidos**: no hay versionado de token. Este cambio no lo empeora, pero
+ * conviene tenerlo presente si algún día se pierde un teléfono.
+ *
+ * ⚠️ NO confundir con el token de restablecer contraseña (`auth_controller.js`, 24 h): ese es otro
+ * propósito y su duración se decide aparte.
+ */
+const TOKEN_SESION_EXPIRA_EN = '16h';
+
 module.exports = {
 
     // 📌 LOGIN DE USUARIO
@@ -357,7 +384,7 @@ module.exports = {
                     userType: defaultCompany.user_type
                 },
                 SECRET_KEY,
-                { expiresIn: '8h' }
+                { expiresIn: TOKEN_SESION_EXPIRA_EN }
             );
 
             // Procesar el teléfono para separar código de país y número
@@ -1503,7 +1530,7 @@ module.exports = {
                         companyId: companyId,
                         roleId: roleId,
                         userType: userType
-                    }, SECRET_KEY, { expiresIn: '8h' });
+                    }, SECRET_KEY, { expiresIn: TOKEN_SESION_EXPIRA_EN });
 
                 }
 

@@ -178,6 +178,22 @@ module.exports = function(sequelize, DataTypes) {
       allowNull: false,
       defaultValue: Sequelize.literal('CURRENT_TIMESTAMP'),
       comment: 'Fecha y hora de última actualización (actualizada automáticamente por trigger)'
+    },
+    // 🔁 Idempotencia. Aquí ya existía media protección: `idx_unique_visit_report` impide dos
+    // reportes para la misma visita. Pero eso devuelve 409 sin distinguir "es mi propio reintento"
+    // de "otro lo reportó"; el UUID sí lo distingue.
+    client_operation_id: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      comment: 'UUID de la operación en el cliente (idempotencia). NULL = reporte anterior a la sincronización offline.'
+    },
+    // 🕗 Aquí `created_at` ES la fecha de negocio (es la que filtran los reportes de no-venta), así
+    // que al aceptar la hora del cliente se sobrescribe. Sin esta columna no quedaría ningún rastro
+    // de qué entró en diferido.
+    synced_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      comment: 'Cuándo llegó al servidor si venía de la cola offline. NULL = se registró en el momento.'
     }
   }, {
     sequelize,

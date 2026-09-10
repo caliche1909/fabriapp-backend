@@ -96,6 +96,26 @@ app.get('/health', (req, res) => {
     }
 });
 
+/**
+ * 📡 Latido de red para la app de campo (`GET /api/health`).
+ *
+ * El `/health` de arriba es para Docker/Cloud Run y NO cuelga de `/api`, así que desde
+ * `www.fabriapp.com` no se alcanza: el balanceador manda a este backend solo lo que empieza por
+ * `/api`. Y sin un extremo alcanzable, el cliente no puede distinguir "no hay internet" de
+ * "hay rayitas pero no pasan datos" — que es el caso que más se da en la calle.
+ *
+ * Deliberadamente: **sin autenticación**, sin tocar la base de datos y con la respuesta más
+ * pequeña posible. Es un latido, no un diagnóstico: se llama cada pocos minutos desde cada
+ * teléfono con trabajo pendiente por enviar, y tiene que costar prácticamente nada.
+ *
+ * `Cache-Control: no-store` es imprescindible: si un proxy o el service worker cachearan la
+ * respuesta, el teléfono creería que hay internet estando sin cobertura.
+ */
+app.get('/api/health', (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.status(200).json({ ok: true, ts: Date.now() });
+});
+
 // Readiness check - más completo (opcional para Kubernetes)
 app.get('/ready', (req, res) => {
     // Aquí podrías agregar verificaciones adicionales si necesitas

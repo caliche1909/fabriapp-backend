@@ -11,6 +11,9 @@ const {
 } = require('../models');
 const { Op } = require('sequelize');
 const { autorizarSobreLaVisita } = require('../utils/storeVisits');
+const {
+    CODIGOS, leerCamposDeSincronizacion, buscarOperacionPrevia, esChoqueDeIdempotencia,
+} = require('../utils/sincronizacion');
 
 /**
  * 🛒 CONTROLADOR DE VENTAS
@@ -131,16 +134,71 @@ module.exports = {
      * Body: { store_id, payment_method_id, route_id?, visit_id?, items: [{ product_id, quantity }] }
      */
     async createSale(req, res) {
+        const company_id = req.user.companyId;
+        const user_id = req.user.id;
+
+        // 🔁 CONTRATO DE SINCRONIZACIÓN — se resuelve ANTES de abrir la transacción.
+        //
+        // 🔴 Esta es la protección más importante de todo el módulo. `createSale` admite varias
+        // ventas por visita **a propósito** (el vendedor puede volver a venderle a la misma tienda)
+        // y **suma** el monto a la parada. Sin una clave que identifique "esta venta concreta", un
+        // reintento tras una respuesta perdida —mala cobertura, timeout de 30 s del cliente, o dos
+        // toques en el botón— crea una SEGUNDA VENTA BUENA: doble stock descontado y el Cuadre
+        // descuadrado, en silencio. Con el uuid, el reintento devuelve la venta que ya existe.
+        const sync = leerCamposDeSincronizacion(req.body);
+        if (!sync.ok) {
+            return res.status(400).json({
+                success: false, status: 400, code: CODIGOS.DATOS_INVALIDOS, message: sync.message,
+            });
+        }
+
+        if (sync.clientOperationId) {
+            // ⚠️ `buscarOperacionPrevia` va con `paranoid: false` a propósito: una venta ANULADA
+            // sigue ocupando su uuid en el índice único aunque el findOne normal no la vea. Sin
+            // esto, reintentar una venta anulada no la encontraría, intentaría insertar y chocaría
+            // con el índice devolviendo un 500.
+            const previa = await buscarOperacionPrevia(Sales, sync.clientOperationId);
+            if (previa) {
+                if (previa.company_id !== company_id) {
+                    return res.status(409).json({
+                        success: false, status: 409, code: CODIGOS.DATOS_INVALIDOS,
+                        message: 'Ese identificador de operación ya se usó en otra compañía.',
+                    });
+                }
+                const total = num(previa.total_amount);
+                const itemCount = await SaleItems.count({ where: { sale_id: previa.id } });
+                const visita = previa.visit_id
+                    ? await StoreVisits.findOne({ where: { id: previa.visit_id }, attributes: ['sale_amount'] })
+                    : null;
+                // 🧾 Si la primera vez quedó APARTADA, el reintento tiene que enterarse de lo
+                // mismo. Con `YA_REGISTRADO` a secas, el teléfono la daría por buena y se quedaría
+                // enseñando la parada cerrada con un importe que no cuenta.
+                const apartada = Boolean(previa.conflict_reason);
+                return res.status(200).json({
+                    success: true, status: 200,
+                    code: apartada ? CODIGOS.REGISTRADA_CON_CONFLICTO : CODIGOS.YA_REGISTRADO,
+                    message: apartada ? previa.conflict_reason : 'Esta venta ya estaba registrada.',
+                    data: {
+                        id: previa.id,
+                        total_amount: total,
+                        item_count: itemCount,
+                        location_id: previa.location_id,
+                        visit_sale_amount: apartada ? null : (visita ? num(visita.sale_amount) : null),
+                        anulada: Boolean(previa.deleted_at) || previa.status === 'voided',
+                        ...(apartada ? { conflict_reason: previa.conflict_reason } : {}),
+                    },
+                });
+            }
+        }
+
         const t = await Sales.sequelize.transaction();
         try {
-            const company_id = req.user.companyId;
-            const user_id = req.user.id;
             const { store_id, payment_method_id, route_id, visit_id, items } = req.body;
 
             // 1) Validaciones básicas.
             if (!store_id || !payment_method_id) {
                 await t.rollback();
-                return res.status(400).json({ success: false, status: 400, message: 'Faltan datos obligatorios (tienda y método de pago).' });
+                return res.status(400).json({ success: false, status: 400, code: CODIGOS.DATOS_INVALIDOS, message: 'Faltan datos obligatorios (tienda y método de pago).' });
             }
             if (!Array.isArray(items) || items.length === 0) {
                 await t.rollback();
@@ -165,11 +223,11 @@ module.exports = {
                 location = await InventoryLocations.findOne({ where: { company_id, user_id }, transaction: t });
                 if (!location) {
                     await t.rollback();
-                    return res.status(400).json({ success: false, status: 400, message: 'No tienes una bodega asignada para vender. Comunícate con tu supervisor para que te asigne una.' });
+                    return res.status(400).json({ success: false, status: 400, code: CODIGOS.SIN_BODEGA, message: 'No tienes una bodega asignada para vender. Comunícate con tu supervisor para que te asigne una.' });
                 }
                 if (!bodegaOperativa(location)) {
                     await t.rollback();
-                    return res.status(400).json({ success: false, status: 400, message: 'Tu bodega está inactiva o cerrada; no puedes vender desde ella.' });
+                    return res.status(400).json({ success: false, status: 400, code: CODIGOS.BODEGA_NO_OPERATIVA, message: 'Tu bodega está inactiva o cerrada; no puedes vender desde ella.' });
                 }
             } else if (mode === 'descuenta_central') {
                 // La bodega CENTRAL de la compañía: todos venden de la misma y NO hace falta ser
@@ -177,11 +235,11 @@ module.exports = {
                 location = await InventoryLocations.findOne({ where: { company_id, is_default: true }, transaction: t });
                 if (!location) {
                     await t.rollback();
-                    return res.status(400).json({ success: false, status: 400, message: 'Tu compañía no tiene una bodega principal configurada; no se puede registrar la venta.' });
+                    return res.status(400).json({ success: false, status: 400, code: CODIGOS.SIN_BODEGA, message: 'Tu compañía no tiene una bodega principal configurada; no se puede registrar la venta.' });
                 }
                 if (!bodegaOperativa(location)) {
                     await t.rollback();
-                    return res.status(400).json({ success: false, status: 400, message: 'La bodega principal está inactiva o cerrada; no se puede vender desde ella.' });
+                    return res.status(400).json({ success: false, status: 400, code: CODIGOS.BODEGA_NO_OPERATIVA, message: 'La bodega principal está inactiva o cerrada; no se puede vender desde ella.' });
                 }
             }
 
@@ -195,25 +253,45 @@ module.exports = {
             //
             //    Si la venta NO trae `visit_id` no hay jornada de por medio (venta suelta desde
             //    Gestión de tiendas): se deja como estaba, sin regla de ruta.
+            //    🧾 VENTAS QUE YA NO CABEN — se guardan APARTADAS en vez de perderse.
+            //
+            //    🔴 EL CASO REAL: el vendedor vendió sin señal y cobró. Horas después, al
+            //    sincronizar, resulta que esa parada se cerró con un reporte de no compra, o que
+            //    reasignaron la ruta. Rechazar la venta la borraría del mundo: el dinero cambió de
+            //    manos y no quedaría rastro en ninguna parte.
+            //
+            //    Por eso estos conflictos ya no cortan: se anotan en `conflicto` y la venta se
+            //    crea igual, con `deleted_at` puesto (queda fuera de TODOS los informes) y el
+            //    motivo en `conflict_reason`, para que el supervisor pueda verla y actuar.
+            //
+            //    ⚠️ LA RAYA. Solo se apartan los conflictos de NEGOCIO sobre la visita. Los fallos
+            //    de validación y de pertenencia se siguen rechazando: guardar basura apartada es
+            //    peor que rechazarla, y aceptar una escritura que no debería existir es abrir una
+            //    puerta. Ver `OFFLINE-CAMPO.md` §11.5.
+            let conflicto = null;                 // { code, message } o null
+            let visitaLigada = visit_id || null;  // se suelta si la visita ya no existe
+
             if (visit_id) {
                 const laVisita = await StoreVisits.findOne({ where: { id: visit_id }, transaction: t });
                 if (!laVisita) {
+                    // Se aparta y se SUELTA de la visita: si la parada ya no existe, dejar el
+                    // `visit_id` apuntando a nada rompería la clave foránea.
+                    conflicto = { code: CODIGOS.VISITA_NO_EXISTE, message: 'La visita indicada ya no existe; la venta se guardó como incidencia.' };
+                    visitaLigada = null;
+                } else if (laVisita.store_id !== parseInt(store_id, 10)) {
+                    // ❌ NO se aparta: esto no es un conflicto, es una petición mal formada.
                     await t.rollback();
-                    return res.status(403).json({ success: false, status: 403, message: 'La visita indicada no existe.' });
-                }
-                if (laVisita.store_id !== parseInt(store_id, 10)) {
-                    await t.rollback();
-                    return res.status(400).json({ success: false, status: 400, message: 'La visita indicada no corresponde a esta tienda.' });
-                }
-                const permiso = await autorizarSobreLaVisita({ visita: laVisita, companyId: company_id, userId: user_id, transaction: t });
-                if (!permiso.autorizado) {
-                    await t.rollback();
-                    return res.status(403).json({ success: false, status: 403, message: permiso.mensaje });
-                }
-                const existingNoSale = await store_no_sale_reports.findOne({ where: { visit_id }, transaction: t });
-                if (existingNoSale) {
-                    await t.rollback();
-                    return res.status(409).json({ success: false, status: 409, message: 'Ya se envió un reporte de no-venta para esta visita; no se puede registrar una venta.' });
+                    return res.status(400).json({ success: false, status: 400, code: CODIGOS.DATOS_INVALIDOS, message: 'La visita indicada no corresponde a esta tienda.' });
+                } else {
+                    const permiso = await autorizarSobreLaVisita({ visita: laVisita, companyId: company_id, userId: user_id, transaction: t });
+                    if (!permiso.autorizado) {
+                        conflicto = { code: CODIGOS.NO_ES_ENCARGADO, message: `${permiso.mensaje} La venta se guardó como incidencia.` };
+                    } else {
+                        const existingNoSale = await store_no_sale_reports.findOne({ where: { visit_id }, transaction: t });
+                        if (existingNoSale) {
+                            conflicto = { code: CODIGOS.NO_VENTA_YA_REGISTRADA, message: 'Esa parada ya se había cerrado con un reporte de no compra; la venta se guardó como incidencia.' };
+                        }
+                    }
                 }
             }
 
@@ -241,20 +319,26 @@ module.exports = {
             // 6b) Sin inventario, el CATÁLOGO es el único filtro de lo vendible: aquí el guardián es
             //     `is_active` (con bodega, el guardián es tener existencias). Evita que un POS abierto
             //     desde antes —o una petición armada a mano— venda un producto ya descontinuado.
-            if (!location) {
+            //
+            //     Descontinuar un producto DESPUÉS de venderlo también aparta la venta en vez de
+            //     perderla: el vendedor lo entregó y lo cobró. La contrapartida es que un vendedor
+            //     con señal y el POS abierto de antes recibe "quedó como incidencia" en vez de
+            //     "ese producto ya no está" — un mensaje peor, pero no se pierde dinero. Entre las
+            //     dos equivocaciones posibles, esta es la barata.
+            if (!location && !conflicto) {
                 const inactivo = prods.find((p) => !p.is_active);
                 if (inactivo) {
-                    await t.rollback();
-                    return res.status(400).json({
-                        success: false, status: 400,
-                        message: `El producto "${inactivo.name}" ya no está disponible para la venta.`,
-                    });
+                    conflicto = {
+                        code: CODIGOS.PRODUCTO_NO_DISPONIBLE,
+                        message: `El producto "${inactivo.name}" ya no está disponible para la venta; la venta se guardó como incidencia.`,
+                    };
                 }
             }
 
             // 7) Pre-chequeo de stock en la bodega (mensaje amigable). El trigger es el guardián real.
-            //    Se salta cuando la venta no toca inventario (no hay saldo que consultar).
-            if (location) {
+            //    Se salta cuando la venta no toca inventario (no hay saldo que consultar) y cuando
+            //    la venta va apartada: esa no descuenta nada, así que no hay saldo que comprobar.
+            if (location && !conflicto) {
                 const balances = await ProductStockBalances.findAll({
                     where: { location_id: location.id, product_id: { [Op.in]: productIds } },
                     transaction: t,
@@ -267,7 +351,7 @@ module.exports = {
                         await t.rollback();
                         const p = prodById.get(pid);
                         return res.status(409).json({
-                            success: false, status: 409,
+                            success: false, status: 409, code: CODIGOS.STOCK_INSUFICIENTE,
                             message: `Stock insuficiente de "${p ? p.name : 'producto'}": disponible ${available}, intentas vender ${want}.`,
                         });
                     }
@@ -313,13 +397,41 @@ module.exports = {
                 discount_amount: 0,
                 total_amount: total,
                 route_id: route_id || null,
-                visit_id: visit_id || null,
+                visit_id: visitaLigada,   // se suelta si la visita ya no existe (ver el punto 4)
                 status: 'completed',
+
+                // 🧾 APARTADA. Nace con `deleted_at` puesto: eso es lo que la deja fuera de las 16
+                // consultas que leen `sales` —todas filtran `deleted_at IS NULL`— sin tener que
+                // tocar ni una de ellas.
+                //
+                // 🔴 Se pone en el INSERT, NO se borra después. Borrarla pasaría por el gancho
+                // `beforeDestroy`, que exige un `options.userId` — y aquí no hay ninguno, porque
+                // NADIE la borró: nació así. `deleted_by` se queda en NULL, que es lo correcto.
+                //
+                // `location_id` SÍ se conserva aunque no se mueva stock: documenta de qué bodega
+                // debió salir la mercancía, que es justo lo que hará falta para cuadrarla.
+                ...(conflicto ? { deleted_at: new Date(), conflict_reason: conflicto.message } : {}),
+
+                // 🔁 Sincronización. `sale_date` es la fecha de NEGOCIO —la que filtran todos los
+                // reportes y el Cuadre— así que es ahí donde va la hora real de la venta cuando el
+                // cliente la declara. Sin esto, sincronizar en lote pondría las ventas de todo el
+                // día a la misma hora de la tarde. (`created_at` no se puede fijar a mano en este
+                // modelo, y está bien: se queda como la hora en que el servidor recibió la fila.)
+                //
+                // El spread es para NO mandar la clave cuando no hay hora declarada: así el
+                // `defaultValue` del modelo (CURRENT_TIMESTAMP) entra sin depender de cómo trate
+                // Sequelize un `undefined` explícito.
+                ...(sync.occurredAt ? { sale_date: sync.occurredAt } : {}),
+                client_operation_id: sync.clientOperationId,
+                synced_at: sync.syncedAt,
             }, { transaction: t });
 
             // 10) Ítems + movimientos SALIDA (el trigger descuenta el saldo y protege < 0).
-            //     El ítem de venta se guarda SIEMPRE (es el detalle de la factura y la fuente del
-            //     costo/margen en los reportes); el movimiento de stock solo si hay bodega.
+            //     El ítem de venta se guarda SIEMPRE —incluso apartada: **sin el detalle, la
+            //     incidencia no le sirve de nada a quien tenga que cuadrarla**—; el movimiento de
+            //     stock solo si hay bodega Y la venta no va apartada. Una venta que no cuenta no
+            //     puede descontar existencias: sería restar stock por algo que no existe en los
+            //     informes.
             for (const row of itemRows) {
                 await SaleItems.create({
                     sale_id: newSale.id,
@@ -332,7 +444,7 @@ module.exports = {
                     total_price: row.total_price,
                 }, { transaction: t });
 
-                if (location) {
+                if (location && !conflicto) {
                     await ProductStockMovements.create({
                         company_id,
                         product_id: row.product_id,
@@ -358,8 +470,13 @@ module.exports = {
             //     El `user_id` de la parada NO se sobreescribe: sigue siendo quien LLEGÓ a la tienda.
             //     Quién vendió está en `sales.user_id`. Así el relevo no borra ningún dato: cada
             //     acción queda a nombre de quien la hizo, en su propia tabla.
+            //
+            //     🧾 Una venta APARTADA no toca la visita: ni suma su importe ni la cierra. Es la
+            //     regla entera en una línea — **la parada tiene que seguir contando la verdad**, y
+            //     esta venta no cuenta. (Si el conflicto era justamente que la parada ya se había
+            //     cerrado con un reporte de no compra, sumarle el importe la descuadraría.)
             let visitSaleAmount = null;
-            if (visit_id) {
+            if (visit_id && !conflicto) {
                 await StoreVisits.increment({ sale_amount: total }, { where: { id: visit_id }, transaction: t });
                 await StoreVisits.update({ status: 'completed' }, { where: { id: visit_id }, transaction: t });
                 const v = await StoreVisits.findOne({ where: { id: visit_id }, attributes: ['sale_amount'], transaction: t });
@@ -367,6 +484,31 @@ module.exports = {
             }
 
             await t.commit();
+
+            // 🧾 Apartada: se responde 200 (no 201) y con un código propio.
+            //
+            // 🔴 ES UN ÉXITO PARA LA COLA Y UN AVISO PARA LA PANTALLA, a la vez. La operación está
+            // en Postgres, que es la única condición para sacarla de la cola del teléfono; pero el
+            // cliente tiene trabajo: devolver el stock que descontó (aquí no se movió ninguno),
+            // recargar la ruta —la parada NO quedó cerrada con esta venta— y decírselo al vendedor
+            // con otras palabras que un rechazo. Ver `OFFLINE-CAMPO.md` §11.7.
+            if (conflicto) {
+                return res.status(200).json({
+                    success: true,
+                    status: 200,
+                    code: CODIGOS.REGISTRADA_CON_CONFLICTO,
+                    message: conflicto.message,
+                    data: {
+                        id: newSale.id,
+                        total_amount: total,
+                        item_count: itemRows.length,
+                        location_id: location ? location.id : null,
+                        visit_sale_amount: null,      // no suma a la parada: no cuenta
+                        conflict_reason: conflicto.message,
+                        conflict_code: conflicto.code,
+                    },
+                });
+            }
 
             return res.status(201).json({
                 success: true,
@@ -383,10 +525,41 @@ module.exports = {
 
         } catch (error) {
             await t.rollback();
+
+            // 🔁 Carrera de idempotencia: dos peticiones idénticas a la vez (el vendedor toca dos
+            // veces, o la cola reintenta mientras el primer envío seguía vivo). El SELECT de más
+            // arriba no vio a la otra porque aún no había hecho commit, y el índice único frenó a
+            // la segunda. La relectura va DESPUÉS del rollback y fuera de la transacción abortada:
+            // en Postgres una sentencia fallida invalida la transacción entera y cualquier
+            // consulta posterior devolvería "transacción abortada".
+            if (esChoqueDeIdempotencia(error) && sync.clientOperationId) {
+                const previa = await buscarOperacionPrevia(Sales, sync.clientOperationId);
+                if (previa) {
+                    const visita = previa.visit_id
+                        ? await StoreVisits.findOne({ where: { id: previa.visit_id }, attributes: ['sale_amount'] })
+                        : null;
+                    // Mismo criterio que en la relectura de arriba: si quedó apartada, se dice.
+                    const apartada = Boolean(previa.conflict_reason);
+                    return res.status(200).json({
+                        success: true, status: 200,
+                        code: apartada ? CODIGOS.REGISTRADA_CON_CONFLICTO : CODIGOS.YA_REGISTRADO,
+                        message: apartada ? previa.conflict_reason : 'Esta venta ya estaba registrada.',
+                        data: {
+                            id: previa.id,
+                            total_amount: num(previa.total_amount),
+                            item_count: await SaleItems.count({ where: { sale_id: previa.id } }),
+                            location_id: previa.location_id,
+                            visit_sale_amount: apartada ? null : (visita ? num(visita.sale_amount) : null),
+                            ...(apartada ? { conflict_reason: previa.conflict_reason } : {}),
+                        },
+                    });
+                }
+            }
+
             // El trigger de stock lanza check_violation (23514) si una SALIDA dejaría el saldo negativo
             // (carrera concurrente que el pre-chequeo no alcanzó a ver). Se traduce a 409 amigable.
             if (error && error.original && error.original.code === '23514') {
-                return res.status(409).json({ success: false, status: 409, message: 'Stock insuficiente para completar la venta (el inventario cambió). Revisa las cantidades e intenta de nuevo.' });
+                return res.status(409).json({ success: false, status: 409, code: CODIGOS.STOCK_INSUFICIENTE, message: 'Stock insuficiente para completar la venta (el inventario cambió). Revisa las cantidades e intenta de nuevo.' });
             }
             console.error('Error al crear venta:', error);
             return res.status(500).json({ success: false, status: 500, message: 'Error interno del servidor al registrar la venta.' });
