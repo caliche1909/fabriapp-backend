@@ -12,6 +12,7 @@
     "dev": "nodemon src/server.js",
     "dev:local": "nodemon src/server.js",
     "test": "echo \"Error: no test specified\" && exit 1",
+    "pruebas": "node pruebas/correr.js",
     "health": "curl -f http://localhost:3000/health || exit 1",
     "docker:build": "docker build -t fabriapp-backend .",
     "docker:run": "docker run -p 3000:3000 fabriapp-backend",

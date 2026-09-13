@@ -5,6 +5,7 @@ const {
 } = require('../utils/sincronizacion');
 const { Op } = require('sequelize'); // ✅ Importar Op de Sequelize
 const bcrypt = require('bcrypt');
+const { referenciaDeRuta } = require('../utils/referenciaCompra');
 
 const SALT_ROUNDS = 10;
 
@@ -813,6 +814,27 @@ module.exports = {
                 ]
             });
 
+            // 💰 Cuánto suele comprar cada tienda de esta ruta.
+            //
+            // Se CALCULA, no se guarda en una columna, y la decisión está razonada con números en
+            // `PENDING-IMPLEMENTATION.md`: son 45-74 ms una vez al abrir la ruta, y a cambio hay
+            // una sola definición —la misma que usan el Cuadre y la oportunidad perdida—, así que
+            // el informe del supervisor y la tarjeta del vendedor no pueden decir cosas distintas.
+            //
+            // Viaja dentro de la respuesta de tiendas, así que entra SOLO en el snapshot de la
+            // jornada y la tarjeta también lo enseña sin señal.
+            //
+            // 🔴 Si esto fallara, la lista de tiendas NO debe caerse: el promedio es información
+            // añadida, no el dato principal. Sin él las tarjetas simplemente no lo enseñan.
+            let referencia = new Map();
+            try {
+                referencia = await referenciaDeRuta(stores.sequelize, {
+                    routeId: rid, companyId, tz,
+                });
+            } catch (e) {
+                console.error('⚠️ No se pudo calcular la referencia de compra de la ruta:', e.message);
+            }
+
             // 🎨 Formatear respuesta para el frontend (igual que createStore/updateStore)
             const formattedStores = allStores.map(store => {
                 const storeData = store.toJSON();
@@ -862,6 +884,12 @@ module.exports = {
                 storeData.current_visit_id = dayVisit ? dayVisit.id : null;
                 // Contexto de ruta: el frontend usa route_id como la ruta abierta.
                 storeData.route_id = rid;
+
+                // 💰 Referencia de compra. `null` significa "nunca ha comprado", que NO es lo
+                // mismo que comprar cero: la tarjeta tiene que distinguirlo.
+                const ref = referencia.get(storeData.id);
+                storeData.compra_promedio = ref ? ref.promedio : null;
+                storeData.ultima_compra = ref ? ref.ultima_compra : null;
 
                 return storeData;
             });
@@ -1566,17 +1594,22 @@ module.exports = {
                 });
             }
 
-            // 🔐 Solo el ENCARGADO ACTUAL de la ruta puede recorrerla (regla compartida).
-            const permiso = await autorizarSobreLaVisita({
-                visita: visitRecord, companyId: req.user.companyId, userId: user_id, transaction,
-            });
-            if (!permiso.autorizado) {
-                await transaction.rollback();
-                return res.status(403).json({
-                    success: false, status: 403, code: CODIGOS.NO_ES_ENCARGADO, message: permiso.mensaje,
-                });
-            }
-
+            // ¿Ya está cerrada? Esto se pregunta ANTES que "¿eres el encargado?", y el orden
+            // NO es casual.
+            //
+            // 🔴 EL CASO REAL QUE ARREGLA. El vendedor marca tiendas sin señal. Horas después
+            // —o al día siguiente— la cola se vacía, pero para entonces la ruta se REASIGNÓ.
+            // `autorizarSobreLaVisita` compara contra el encargado de AHORA, no contra el del día
+            // en que se hizo el trabajo, así que contestaba `NO_ES_ENCARGADO`: un rechazo
+            // DEFINITIVO, con su alarma roja, **por una parada que el relevo ya había cerrado
+            // correctamente**. El vendedor veía "no se pudo registrar" sobre algo registrado.
+            // Y no es un caso de laboratorio: en el histórico, 6.212 de 18.433 paradas tienen un
+            // resolutor distinto del encargado actual. Reasignar rutas es rutina.
+            //
+            // Preguntarlo primero es seguro: esto es una LECTURA que hace `rollback` y no escribe
+            // nada, así que no debilita la regla de "solo el encargado opera" — contestar "esto ya
+            // está hecho" no es operar. Y no filtra nada: quien pregunta tiene esa tienda en su
+            // propia cola, con su nombre y su día, porque estuvo allí.
             if (visitRecord.status === 'visited' || visitRecord.status === 'completed') {
                 await transaction.rollback();
                 // Para la cola de reenvío esto NO es un fallo: la parada está cerrada, que es el
@@ -1589,6 +1622,19 @@ module.exports = {
                     status: 409,
                     code: CODIGOS.VISITA_YA_CERRADA,
                     message: 'Esta tienda ya fue visitada hoy',
+                });
+            }
+
+            // 🔐 Solo el ENCARGADO ACTUAL de la ruta puede recorrerla (regla compartida).
+            // Se llega aquí solo si la parada sigue ABIERTA, o sea cuando de verdad se va a
+            // escribir sobre ella. Ahí la regla manda entera y sin excepciones.
+            const permiso = await autorizarSobreLaVisita({
+                visita: visitRecord, companyId: req.user.companyId, userId: user_id, transaction,
+            });
+            if (!permiso.autorizado) {
+                await transaction.rollback();
+                return res.status(403).json({
+                    success: false, status: 403, code: CODIGOS.NO_ES_ENCARGADO, message: permiso.mensaje,
                 });
             }
 

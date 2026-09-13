@@ -50,61 +50,13 @@ const SALES_WHERE = `sa.company_id = :cid AND sa.deleted_at IS NULL
     AND (sa.sale_date AT TIME ZONE :tz)::date BETWEEN :from AND :to`;
 
 /**
- * 📐 REFERENCIA DE COMPRA POR TIENDA — cuánto suele comprar cada tienda.
+ * La definición de "cuánto suele comprar una tienda" se movió a `utils/referenciaCompra.js`
+ * el 2026-09-12, cuando la lista de tiendas de una ruta pasó a enseñarla en cada tarjeta.
  *
- * Es la base para estimar lo que se dejó de vender cuando una tienda no compra o
- * no se visita. Se usa tanto en el detalle del Cuadre como en la sección de
- * oportunidad perdida, por eso vive aquí y no dentro de un handler.
- *
- * Criterio: promedio de los ÚLTIMOS 90 DÍAS si la tienda tiene al menos 2 ventas
- * ahí (refleja precios y hábitos actuales); si no, el promedio de todo su
- * historial (tiendas de compra esporádica). Solo se promedian visitas con venta
- * > 0: incluir los ceros hundiría la referencia hasta volverla inútil.
- *
- * Las tiendas que NUNCA han comprado no aparecen aquí: al hacer LEFT JOIN quedan
- * con `promedio` NULL, y quien consuma esto debe contarlas aparte (no estimarlas).
- *
- * Requiere los replacements :cid, :tz y :to. Se inserta tras un `WITH`.
- *
- * NOTA 1: se usa CAST(:to AS date) y no `:to::date` para no confundir al parser de
- * replacements de Sequelize con el `::` de PostgreSQL.
- *
- * ⚠️ NOTA 2 — `AS MATERIALIZED` NO ES DECORATIVO. Desde PostgreSQL 12 los CTE
- * referenciados una sola vez se inlinean, y aquí el planificador elegía un nested
- * loop que **recalculaba esta referencia una vez por cada fila** del resultado
- * (888 iteraciones medidas → 602 ms). Forzando la materialización se computa una
- * sola vez y el plan pasa a hash join: **40 ms, 15× más rápido**. Si algún día se
- * quita esta palabra, el rendimiento se desploma en silencio.
+ * 🔴 NO LA COPIES DE VUELTA AQUÍ. Con dos copias, el día que se ajuste la ventana de 90 días
+ * el informe y la tarjeta dirían números distintos con el mismo nombre.
  */
-const CTE_REFERENCIA_TIENDA = `
-    ref_reciente AS (
-        SELECT sv.store_id, AVG(sv.sale_amount) AS promedio, COUNT(*)::int AS n
-        FROM store_visits sv
-        JOIN stores st ON st.id = sv.store_id
-        WHERE st.company_id = :cid
-          AND sv.sale_amount > 0
-          AND (sv.date AT TIME ZONE :tz)::date
-              BETWEEN (CAST(:to AS date) - INTERVAL '90 days') AND CAST(:to AS date)
-        GROUP BY sv.store_id
-    ),
-    ref_historica AS (
-        SELECT sv.store_id,
-               AVG(sv.sale_amount) AS promedio,
-               MAX(sv.date) AS ultima_compra
-        FROM store_visits sv
-        JOIN stores st ON st.id = sv.store_id
-        WHERE st.company_id = :cid AND sv.sale_amount > 0
-        GROUP BY sv.store_id
-    ),
-    referencia AS MATERIALIZED (
-        SELECT h.store_id,
-               CASE WHEN r.n >= 2 THEN r.promedio ELSE h.promedio END AS promedio,
-               CASE WHEN r.n >= 2 THEN 'reciente' ELSE 'historico' END AS origen,
-               h.ultima_compra
-        FROM ref_historica h
-        LEFT JOIN ref_reciente r ON r.store_id = h.store_id
-    )
-`;
+const { CTE_REFERENCIA_TIENDA } = require('../utils/referenciaCompra');
 
 module.exports = {
     /**

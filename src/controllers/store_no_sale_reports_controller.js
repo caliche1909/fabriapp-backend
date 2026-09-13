@@ -94,18 +94,21 @@ const StoreNoSaleReportsController = {
                 });
             }
 
-            // 🔐 Solo el ENCARGADO ACTUAL de la ruta puede cerrar sus visitas.
-            // Antes NO se verificaba NINGUNA pertenencia: bastaba el permiso y que la visita no
-            // estuviera 'pending', así que cualquiera podía reportar una no-venta sobre la visita
-            // de otro vendedor —y eso CIERRA la parada en 'completed'—. Misma regla que marcar y vender.
-            const permiso = await autorizarSobreLaVisita({
-                visita: dayVisit, companyId: company_id, userId: user_id, transaction,
-            });
-            if (!permiso.autorizado) {
-                await transaction.rollback();
-                return res.status(403).json({ success: false, status: 403, code: CODIGOS.NO_ES_ENCARGADO, message: permiso.mensaje });
-            }
-
+            // ¿La visita YA quedó cerrada por otra operación? Se pregunta ANTES que "¿eres el
+            // encargado?", igual que en `updateStoreAsVisited`, y por el mismo motivo.
+            //
+            // 🔴 Sin esto, un reporte que sale de la cola después de que la ruta se REASIGNE se
+            // lleva un `NO_ES_ENCARGADO` —rechazo definitivo, alarma roja— aunque la parada ya
+            // estuviera cerrada como no-venta, que era justo lo que se quería. La autorización
+            // mira al encargado de AHORA, no al del día en que se hizo el trabajo.
+            //
+            // Es seguro porque son LECTURAS que hacen `rollback`: no se escribe nada, así que la
+            // regla de "solo el encargado opera" sigue intacta para todo lo que sí escribe.
+            //
+            // ⚠️ `sales` es paranoid, así que este `findOne` NO ve las ventas APARTADAS. Es lo
+            // correcto y es deliberado: una venta apartada es una que el servidor decidió que no
+            // cuenta, y dejarla cerrar una parada convertiría un conflicto en un hecho. Si alguien
+            // añade `paranoid: false` aquí "para ser exhaustivo", rompe eso sin enterarse.
             // Verificar que no exista un reporte para la misma visita (si se proporciona visit_id)
             if (visit_id) {
                 const existingReport = await store_no_sale_reports.findOne({
@@ -146,6 +149,19 @@ const StoreNoSaleReportsController = {
                     });
                 }
             }
+
+            // 🔐 Solo el ENCARGADO ACTUAL de la ruta puede cerrar sus visitas.
+            // Antes NO se verificaba NINGUNA pertenencia: bastaba el permiso y que la visita no
+            // estuviera 'pending', así que cualquiera podía reportar una no-venta sobre la visita
+            // de otro vendedor —y eso CIERRA la parada en 'completed'—. Misma regla que marcar y vender.
+            const permiso = await autorizarSobreLaVisita({
+                visita: dayVisit, companyId: company_id, userId: user_id, transaction,
+            });
+            if (!permiso.autorizado) {
+                await transaction.rollback();
+                return res.status(403).json({ success: false, status: 403, code: CODIGOS.NO_ES_ENCARGADO, message: permiso.mensaje });
+            }
+
 
 
 
