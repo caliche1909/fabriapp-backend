@@ -7,6 +7,16 @@ const { sendWelcomeEmail, sendPasswordResetEmail } = require('../utils/emailNoti
 const SALT_ROUNDS = 10;
 const SECRET_KEY = process.env.JWT_SECRET;
 
+/**
+ * La ÚNICA respuesta de "olvidé mi contraseña" por correo, exista la cuenta o no.
+ *
+ * Vive en una constante justamente para que no pueda divergir: dos textos parecidos escritos en
+ * dos sitios acaban separándose, y en cuanto se separan vuelve la enumeración de usuarios.
+ */
+const MENSAJE_RECUPERACION =
+    'Si el correo está registrado, te enviamos un enlace para recuperar tu contraseña. ' +
+    'Revisa también la carpeta de spam.';
+
 module.exports = {
     // 📌 RECUPERAR CONTRASEÑA
     async forgotPassword(req, res) {
@@ -49,10 +59,30 @@ module.exports = {
                 });
 
                 if (!userInDB) {
-                    return res.status(404).json({
-                        success: false,
-                        status: 404,
-                        message: 'El correo ingresado no está asociado a ninguna cuenta'
+                    /**
+                     * 🔴 RESPONDE COMO SI EL CORREO EXISTIERA (2026-09-15).
+                     *
+                     * Es la misma fuga que se cerró en el login, y aquí era **más fácil de
+                     * explotar**: no hace falta ni intentar una contraseña. Un 404 diciendo "ese
+                     * correo no está asociado a ninguna cuenta" le confirma a cualquiera, correo
+                     * por correo, quién tiene cuenta en FabriApp.
+                     *
+                     * El mensaje tiene que ser **idéntico** al del camino bueno —byte por byte— o
+                     * la fuga sigue abierta. Si alguien lo cambia, que cambie los dos.
+                     *
+                     * ⚠️ Coste conocido y aceptado: quien se equivoque al teclear su correo ya no
+                     * recibe un "ese correo no existe"; verá el mismo mensaje y esperará un email
+                     * que no llega. Por eso el texto invita a revisar el spam y a reintentar.
+                     *
+                     * ⚠️ Y de paso: aquí se volvía sin cerrar la transacción. Una transacción
+                     * abierta y abandonada queda como `idle in transaction` y bloquea a las
+                     * siguientes (ver el README de `server/pruebas/`).
+                     */
+                    await transaction.rollback();
+                    return res.status(200).json({
+                        success: true,
+                        status: 200,
+                        message: MENSAJE_RECUPERACION
                     });
                 }
 
@@ -126,10 +156,11 @@ module.exports = {
 
                 await transaction.commit();
 
+                // El MISMO mensaje que cuando el correo no existe: ahí está la protección.
                 res.status(200).json({
                     success: true,
                     status: 200,
-                    message: 'Se ha enviado un enlace de recuperación a tu correo electrónico'
+                    message: MENSAJE_RECUPERACION
                 });
 
             } else {

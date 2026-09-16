@@ -34,6 +34,15 @@ const SECRET_KEY = process.env.JWT_SECRET;
  */
 const TOKEN_SESION_EXPIRA_EN = '16h';
 
+/**
+ * Hash señuelo contra el que se compara cuando el correo NO existe, para que fallar por "no hay
+ * usuario" cueste lo mismo en tiempo que fallar por "contraseña mala". Ver el comentario del login.
+ *
+ * Se calcula al arrancar —una sola vez— con el mismo coste que usa el modelo al guardar una
+ * contraseña real. No corresponde a ninguna contraseña que nadie pueda escribir.
+ */
+const HASH_SENUELO = bcrypt.hashSync('senuelo-sin-uso-' + Date.now(), 10);
+
 module.exports = {
 
     // 📌 LOGIN DE USUARIO
@@ -73,22 +82,33 @@ module.exports = {
                 ]
             });
 
-            // Verificar si el usuario existe
-            if (!userForLogin) {
-                return res.status(404).json({
-                    success: false,
-                    status: 404,
-                    message: "El usuario ingresado no existe"
-                });
-            }
+            /**
+             * 🔴 LAS DOS FORMAS DE FALLAR RESPONDEN EXACTAMENTE IGUAL (2026-09-15).
+             *
+             * Antes, un correo desconocido daba 404 "El usuario ingresado no existe" y una
+             * contraseña mala daba 400 "Contraseña incorrecta". Eso es **enumeración de usuarios**:
+             * cualquiera con una lista de correos podía averiguar cuáles tienen cuenta en FabriApp
+             * sin saber ni una contraseña, y con eso dirigir el phishing a quien sí existe.
+             *
+             * Ahora los dos casos devuelven **el mismo cuerpo y el mismo 401**, y hay que mantenerlo
+             * así: separarlos de nuevo "para ayudar al usuario" vuelve a abrir la puerta. Quien se
+             * equivoca de verdad tiene la recuperación de contraseña.
+             *
+             * ⚠️ Y NO BASTA CON IGUALAR EL MENSAJE: si el usuario no existe se saltaba el bcrypt y
+             * la respuesta volvía en una fracción del tiempo. **El reloj también delata.** Por eso,
+             * cuando no hay usuario, se compara igualmente contra un hash señuelo: así las dos
+             * ramas cuestan lo mismo. El señuelo se genera al arrancar con el MISMO coste (10) que
+             * las contraseñas reales, para que los tiempos no se separen si algún día se sube.
+             */
+            const passwordMatch = userForLogin
+                ? await userForLogin.validatePassword(password)
+                : await bcrypt.compare(password, HASH_SENUELO);
 
-            // Verificar contraseña usando el método del modelo
-            const passwordMatch = await userForLogin.validatePassword(password);
-            if (!passwordMatch) {
-                return res.status(400).json({
+            if (!userForLogin || !passwordMatch) {
+                return res.status(401).json({
                     success: false,
-                    status: 400,
-                    message: "Contraseña incorrecta"
+                    status: 401,
+                    message: "Credenciales incorrectas"
                 });
             }
 

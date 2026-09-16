@@ -392,6 +392,93 @@ const validateSellerInCompany = async (userId, companyId) => {
 
 module.exports = {
 
+    /**
+     * 👥 A QUIÉN SE LE PUEDE ENTREGAR UNA RUTA.
+     *
+     * 🔴 POR QUÉ EXISTE ESTE ENDPOINT Y NO SE REUSA EL DE USUARIOS (decisión del usuario,
+     * 2026-09-15). El diálogo de crear/editar ruta pedía la lista a `GET /api/users/company/:id`,
+     * que exige el permiso **`view_users`** — un permiso de ADMINISTRACIÓN DE USUARIOS. Eso obligaba
+     * a darle a un supervisor de reparto la potestad de ver la ficha de todo el personal sólo para
+     * poder elegir quién lleva una ruta. Dos cosas distintas metidas en el mismo permiso.
+     *
+     * La regla correcta es la que gobierna la acción que se está haciendo: **quien puede crear o
+     * editar una ruta puede elegir a su encargado**, porque elegir encargado es parte de crear o
+     * editar una ruta, no de administrar usuarios.
+     *
+     * Devuelve SÓLO lo que el desplegable necesita y sólo miembros que el servidor aceptaría:
+     * membresía activa en la compañía **y** usuario activo — los dos, que es exactamente lo que
+     * exige `validateSellerInCompany` al guardar. Ofrecer a alguien que luego se va a rechazar es
+     * tender una trampa que sólo se descubre al pulsar Guardar.
+     *
+     * ⚠️ La compañía sale de la SESIÓN, nunca del path: cierra el IDOR multi-tenant.
+     *
+     * ⚠️ NO alimenta la caché `usersOfCompany` de Redux, y es deliberado: esa caché la comparte la
+     * pantalla de gestión de usuarios, que **sí** necesita ver a los inactivos para reactivarlos.
+     * Llenarla con esta lista recortada dejaría esa pantalla enseñando menos gente de la que hay.
+     */
+    async getAssignableUsers(req, res) {
+        try {
+            const companyId = req.user.companyId;
+
+            if (!companyId) {
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: 'No se reconoce a la compañía',
+                    users: [],
+                });
+            }
+
+            const membresias = await user_companies.findAll({
+                where: { company_id: companyId, status: 'active' },
+                attributes: ['user_type', 'status'],
+                include: [
+                    {
+                        model: users,
+                        as: 'user',
+                        // El estado GLOBAL del usuario también tiene que estar activo: lo exige
+                        // `validateSellerInCompany` al guardar.
+                        where: { status: 'active' },
+                        required: true,
+                        attributes: [
+                            'id', 'first_name', 'last_name', 'email', 'phone',
+                            'status', 'image_url', 'image_public_id', 'require_geolocation',
+                        ],
+                    },
+                    {
+                        model: roles,
+                        as: 'role',
+                        attributes: ['id', 'name', 'label', 'description', 'is_global', 'is_active'],
+                    },
+                ],
+            });
+
+            // Se reusa `formatSellerData` a propósito: así una opción del desplegable y el
+            // `route.seller` que ya trae la ruta tienen EXACTAMENTE la misma forma. El
+            // Autocomplete compara por `id`, pero el día que alguien compare por otra cosa, no
+            // habrá dos formas distintas del mismo usuario dando guerra.
+            const lista = membresias
+                .map((m) => formatSellerData(m.user, m))
+                .filter(Boolean)
+                .sort((a, b) => `${a.name} ${a.lastName}`.localeCompare(`${b.name} ${b.lastName}`, 'es'));
+
+            return res.status(200).json({
+                success: true,
+                status: 200,
+                message: 'Usuarios asignables obtenidos exitosamente',
+                users: lista,
+            });
+        } catch (error) {
+            console.error('❌ Error al obtener usuarios asignables a una ruta:', error);
+            return res.status(500).json({
+                success: false,
+                status: 500,
+                message: 'Error al obtener los usuarios que pueden quedar a cargo de una ruta',
+                users: [],
+            });
+        }
+    },
+
     // 📌 Método para obtener las rutas activas de una compañía
     // (paranoid: true automáticamente excluye rutas eliminadas)
     async getListRoutes(req, res) {

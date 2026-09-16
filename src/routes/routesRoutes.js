@@ -27,6 +27,25 @@ const deleteRouteLimiter = createDeleteRouteLimiter();
     5. view-assigned-routes -> Permite ver las rutas asignadas al usuario
 */
 
+/**
+ * 👥 Quién puede quedar a cargo de una ruta, para el desplegable de crear/editar ruta.
+ *
+ * 🔴 EL PERMISO ES EL DE LA ACCIÓN QUE SE ESTÁ HACIENDO, NO `view_users` (decisión del usuario,
+ * 2026-09-15). Antes el diálogo pedía la lista a `GET /api/users/company/:id`, que exige
+ * `view_users` — un permiso de administración de personal. Elegir quién lleva una ruta es parte de
+ * crear o editar la ruta; quien puede hacer eso puede elegir encargado, y no le hace falta poder
+ * ver la ficha de todo el mundo.
+ *
+ * Va ANTES de las rutas con `/:route_id` por costumbre, aunque hoy ninguna de un solo segmento
+ * podría capturarlo.
+ */
+router.get('/assignable-users',
+    verifyToken,
+    listRoutesByCompanyLimiter, // 🔒 mismo límite que listar rutas: se pide al abrir el diálogo
+    checkAnyPermission(['create_route_by_company', 'update_route_by_company']),
+    routesController.getAssignableUsers
+);
+
 router.get('/list/:company_id',
     verifyToken,
     listRoutesByCompanyLimiter, // 🔒 40 consultas/15min (se guarda en Redux)
