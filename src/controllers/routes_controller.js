@@ -1,7 +1,8 @@
 const { routes, users, user_companies, roles, stores, route_types, store_visits } = require('../models');
 const { parseWindows, classify, formatMinutes, optimizeOpenStores } = require('../utils/routeOptimization');
 const { Op } = require('sequelize');
-const { construirParada, autorizarSobreLaRuta } = require('../utils/storeVisits');
+const { construirParada, autorizarSobreLaRuta, SQL_TIENE_REPORTE_VIVO } = require('../utils/storeVisits');
+const { CODIGOS } = require('../utils/sincronizacion');
 
 /**
  * 📅 Horizonte máximo de planificación de rutas, en días.
@@ -85,6 +86,15 @@ const formatearParadaDelDia = async (visita, tz) => {
         { type: routes.sequelize.QueryTypes.SELECT, replacements: { tz } }
     );
 
+    // 🚫 Se CONSULTA, no se da por `false`: esta función también devuelve una parada que YA
+    // existía (la venta ocasional sobre una tienda con parada), y esa sí puede estar cerrada con
+    // un reporte de no compra.
+    const [{ has_no_sale_report }] = await routes.sequelize.query(
+        `SELECT ${SQL_TIENE_REPORTE_VIVO} AS has_no_sale_report
+         FROM store_visits WHERE store_visits.id = :vid`,
+        { type: routes.sequelize.QueryTypes.SELECT, replacements: { vid: visita.id } }
+    );
+
     let estado = null;
     let abre_a = null;
     if (visita.status === 'pending') {
@@ -101,6 +111,7 @@ const formatearParadaDelDia = async (visita, tz) => {
         status: visita.status,
         arrived_at: visita.arrived_at,
         sale_amount: Number(visita.sale_amount) || 0,
+        has_no_sale_report: Boolean(has_no_sale_report),
         optimized_seq: visita.optimized_seq,
         visit_type: visita.visit_type,
         latitude: tienda?.latitude != null ? Number(tienda.latitude) : null,
@@ -1440,7 +1451,12 @@ module.exports = {
             // escondería la mitad de la lista al que la está recorriendo.
             const visitas = await store_visits.findAll({
                 where: { route_id: rid, visit_day: targetDate },
-                attributes: ['id', 'store_id', 'store_name', 'store_address', 'status', 'arrived_at', 'sale_amount', 'optimized_seq', 'visit_type'],
+                attributes: [
+                    'id', 'store_id', 'store_name', 'store_address', 'status', 'arrived_at', 'sale_amount', 'optimized_seq', 'visit_type',
+                    // 🚫 Lo que decide si el menú ofrece vender o anular (§14.9). Usa el índice
+                    // parcial `idx_unique_visit_report`, así que es una consulta por fila barata.
+                    [routes.sequelize.literal(SQL_TIENE_REPORTE_VIVO), 'has_no_sale_report'],
+                ],
                 // 📍 Las coordenadas viajan con cada parada para que el cajón sea AUTOSUFICIENTE:
                 // el menú de la fila (cómo llegar, ver en el mapa, marcar con la regla de los
                 // 300 m) necesitaba la tienda completa y la sacaba de la MEMBRESÍA de la ruta.
@@ -1485,6 +1501,7 @@ module.exports = {
                     status: v.status,
                     arrived_at: v.arrived_at,
                     sale_amount: Number(v.sale_amount) || 0,
+                    has_no_sale_report: Boolean(v.has_no_sale_report),
                     optimized_seq: v.optimized_seq,
                     // 'occasional' = la agregó el vendedor sobre la marcha; su tienda no
                     // pertenece a la ruta. El cajón puede distinguirla visualmente.
@@ -1711,8 +1728,8 @@ module.exports = {
      * 🧠 El porqué: la jornada (`store_visits`) es una FOTO que se toma al iniciar la ruta,
      * mientras que la membresía (`routes_stores`) sigue VIVA. Si después de iniciar se agrega
      * o se quita una tienda, la foto y la realidad divergen y nada las reconcilia: la tienda
-     * nueva no se puede marcar ("no tiene visitas pendientes para hoy") y la tienda retirada
-     * sigue apareciendo como parada del día.
+     * nueva no se puede marcar —el marcado responde `SIN_PARADA` y remite AQUÍ— y la tienda
+     * retirada sigue apareciendo como parada del día.
      *
      * ⚠️ La comparación es de CONJUNTOS, no de cantidades. Si el mismo día se sacó una tienda
      * y se agregó otra, los totales cuadran (46 vínculos, 46 paradas) pero hay una parada
@@ -1873,6 +1890,14 @@ module.exports = {
                 // no esté en 'pending', pero se comprueba de nuevo contra las tablas hijas porque
                 // `sales.visit_id` está en ON DELETE SET NULL: borrar una parada con venta NO
                 // fallaría, simplemente desengancharía la venta en silencio. Daño invisible.
+                //
+                // 🔴 AQUÍ **NO** SE FILTRA `annulled_at IS NULL`, Y ES LA EXCEPCIÓN DE LAS NUEVE
+                // LECTURAS DE ESA TABLA (OFFLINE-CAMPO.md §14.7). En todas las demás, un reporte
+                // anulado debe dejar de contar; aquí no, porque esta consulta no pregunta "¿esta
+                // parada está cerrada como no-venta?" sino "¿queda alguna fila apuntando a ella?".
+                // `store_no_sale_reports.visit_id` es NO ACTION: una fila anulada SIGUE ocupando
+                // su `visit_id` y el borrado reventaría contra la clave foránea. Añadir el filtro
+                // aquí cambiaría un "no se puede quitar" claro por un error 500.
                 const [{ ligada }] = await routes.sequelize.query(
                     `SELECT (EXISTS (SELECT 1 FROM sales WHERE visit_id = :vid)
                           OR EXISTS (SELECT 1 FROM store_no_sale_reports WHERE visit_id = :vid)) AS ligada`,
@@ -1942,6 +1967,12 @@ module.exports = {
      *
      * 📅 Solo HOY. Programar a futuro es "planear la ruta", y para eso está iniciar/ajustar; una
      * venta ocasional es por definición algo que surge sobre la marcha.
+     *
+     * 🚧 **Solo para tiendas que NO son de la ruta** (desde el 2026-09-18, paso S2). Una tienda de
+     * la ruta que se quedó sin parada se rechaza con `SIN_PARADA` y se remite a "Ajustar": son dos
+     * caminos distintos y mezclarlos fue el origen de las 5 ventas sin parada del 15-sep. El día
+     * hábil no se revalida aquí —la jornada YA existe, así que esa validación ocurrió al iniciarla,
+     * o el owner la saltó a propósito—, igual que en `applyRouteAdjustments` y por lo mismo.
      */
     async createOccasionalVisit(req, res) {
         let transaction = null;
@@ -2037,13 +2068,39 @@ module.exports = {
                 });
             }
 
-            // 🏷️ `occasional` SOLO si la tienda no pertenece a la ruta. Si es miembro y se quedó
-            // sin parada, lo que se está haciendo es un ajuste y esa parada es legítima: no
-            // necesita la protección frente a "Ajustar", y marcarla confundiría el dato.
+            // 🚧 UNA TIENDA DE LA RUTA NO ENTRA POR AQUÍ. Si es miembro y se quedó sin parada, lo
+            // que hace falta es un AJUSTE de la jornada, no una venta ocasional.
+            //
+            // Antes sí se aceptaba y se le creaba la parada como `in-route`. Parecía inofensivo
+            // —al fin y al cabo la parada faltaba— pero mezclaba los dos caminos, y fue por donde
+            // salieron las 5 ventas sin parada del 15-sep: el vendedor no podía marcar la tienda
+            // recién agregada (el servidor le decía "Primero debes iniciar la ruta", con la ruta ya
+            // iniciada), descubrió que la venta ocasional sí le creaba la parada, y siguió por ahí
+            // con una lista desfasada que mandó las ventas sin `visit_id`. Ver OFFLINE-CAMPO.md §16.
+            //
+            // 🔑 ESTO NO DEJA A NADIE SIN SALIDA, y conviene dejarlo escrito porque es lo que hace
+            // legítimo cerrar la puerta: aquí solo llega el ENCARGADO ACTUAL de la ruta
+            // (`autorizarSobreLaRuta`, arriba), y el diagnóstico de ajuste toma como responsable de
+            // la jornada a ese mismo encargado actual (`COALESCE(r.user_id, ...)` en
+            // `construirDiagnosticoDeAjuste`), así que `puedeAjustarJornada` siempre le dice que sí.
+            // Quien puede pedir una venta ocasional puede ajustar la jornada.
             const esMiembro = await routes.sequelize.models.routes_stores.count({
                 where: { route_id: rid, store_id: store.id, company_id: companyId },
                 transaction,
             });
+            if (esMiembro > 0) {
+                await transaction.rollback();
+                // Mismo código que el marcado (el cliente decide con él), mensaje propio: aquí el
+                // vendedor eligió la tienda de una lista, así que hay que enseñarle la regla.
+                return res.status(409).json({
+                    success: false,
+                    status: 409,
+                    code: CODIGOS.SIN_PARADA,
+                    message: `${store.name} es una tienda de esta ruta que hoy se quedó sin visita `
+                        + 'programada. Usa el botón "Ajustar" para agregarla a la jornada: la venta '
+                        + 'ocasional es solo para tiendas que no pertenecen a la ruta.',
+                });
+            }
 
             const fila = construirParada({
                 store,
@@ -2052,7 +2109,10 @@ module.exports = {
                 userName: await nombreDelResponsable(responsableId, transaction),
                 visitDay: hoy,
                 fechaMarca: ahora,
-                visitType: esMiembro > 0 ? 'in-route' : 'occasional',
+                // Siempre `occasional`: si hubiera llegado hasta aquí siendo miembro, el bloque de
+                // arriba ya la habría rechazado. Es además lo que impide que "Ajustar" la lea como
+                // parada huérfana y ofrezca borrarla.
+                visitType: 'occasional',
             });
 
             const creada = await store_visits.create(fila, { transaction });
@@ -2062,9 +2122,7 @@ module.exports = {
                 success: true,
                 status: 201,
                 ya_existia: false,
-                message: esMiembro > 0
-                    ? `${store.name} se agregó a la jornada de hoy.`
-                    : `${store.name} se agregó como venta ocasional.`,
+                message: `${store.name} se agregó como venta ocasional.`,
                 visita: await formatearParadaDelDia(creada, tz),
             });
         } catch (error) {

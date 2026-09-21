@@ -16,11 +16,26 @@ const router = express.Router();
 
 // 📌 RUTAS PARA NUEVAS VENTAS
 
-// 🛡️ Rate limiter personalizado para creación de ventas (prevenir spam)
+/**
+ * 🛡️ Limitador de creación de ventas.
+ *
+ * 🔴 EL CUPO SE MIDE CONTRA UN DÍA ENTERO, NO CONTRA UNA HORA DE TRABAJO. Cuando el vendedor pasa
+ * la jornada sin señal, la cola se vacía **de golpe** al recuperarla: las ventas de todo el día
+ * llegan dentro de la misma hora. Un cupo pensado para el ritmo real de la calle deja fuera
+ * exactamente el caso que esta aplicación existe para cubrir.
+ *
+ * Estaba en 50/hora y el pico real medido sobre toda la historia (2026-09-16) es de **49 ventas
+ * en un día** para un vendedor: el margen era de una. Ahora va a **3× el pico**, que absorbe el
+ * día completo más los reintentos y sigue siendo un techo bajo para un bucle descontrolado.
+ *
+ * ⚠️ `maxByIP` solo se aplica a peticiones SIN autenticar (`keyGenerator` usa `user:<id>` en
+ * cuanto hay sesión, y aquí `verifyToken` va antes), así que en la práctica no gobierna nada.
+ * Se deja coherente para que nadie lo lea como el límite real.
+ */
 const createSaleLimiter = createGeneralLimiter({
     windowMs: 60 * 60 * 1000,  // 1 hora
-    maxByIP: 35,               // 35 ventas por hora por IP
-    maxByUser: 50,             // 50 ventas por hora por usuario
+    maxByIP: 35,
+    maxByUser: 150,            // 3× el pico real de un vendedor en un día (49)
     message: "Límite de creación de ventas alcanzado"
 });
 
@@ -169,6 +184,27 @@ router.get('/list',
     reportsLimiter,
     checkPermission('view_sales_history'),
     salesReportsController.getSalesList
+);
+
+/**
+ * @route   GET /api/sales/detail/:sale_id
+ * @desc    Una venta con el detalle de sus líneas. Alimenta el cajón de detalle del Cuadre y del
+ *          Historial, y más adelante la reimpresión del ticket.
+ * @access  Privado — 'view_sales_history' O 'view_sales_reconciliation'
+ *
+ * 🔴 EL PERMISO ES `checkAnyPermission` A PROPÓSITO: la misma pregunta —qué llevaba esta venta—
+ * se hace desde DOS pantallas con permisos distintos (el Historial usa `view_sales_history`, el
+ * Cuadre usa `view_sales_reconciliation`). Exigir uno solo dejaría el cajón muerto en la otra.
+ *
+ * ⚠️ El prefijo literal `/detail/` evita cualquier choque con `/list`, `/reports/...`,
+ * `/createSale` y `/pos-catalog`. Con un `/:sale_id` suelto, esta ruta capturaría a las demás
+ * según el orden del archivo.
+ */
+router.get('/detail/:sale_id',
+    verifyToken,
+    reportsLimiter,
+    checkAnyPermission(['view_sales_history', 'view_sales_reconciliation']),
+    salesReportsController.getSaleDetail
 );
 
 /**

@@ -121,8 +121,14 @@ router.post('/:route_id/adjustments',
 
 // 🆕 Venta ocasional: agrega a la jornada de HOY una tienda que no está en la ruta (el
 // vendedor va en Norte y lo llama un tendero de Sur). Crea UNA parada 'pending' más.
-// Sin `checkPermission`: la autorización fina es por jornada dentro del controlador —owner,
-// encargado actual o `start_route_for_others`—, la misma regla de iniciar y de ajustar.
+// 🚧 Y SOLO para tiendas que no son de la ruta: si la tienda es miembro y se quedó sin parada,
+// responde 409 `SIN_PARADA` y remite al botón "Ajustar" (ver OFFLINE-CAMPO.md §16).
+// Sin `checkPermission`: la autorización es por jornada dentro del controlador, y es la de
+// OPERAR, no la de iniciar ni la de ajustar: **solo el encargado actual**, sin excepción para el
+// owner ni para `start_route_for_others` (`autorizarSobreLaRuta`). Además exige que la ruta ya
+// tenga jornada HOY y que la tienda exista en la compañía y no esté borrada.
+// (Este comentario decía "owner, encargado o start_route_for_others": era de la versión anterior,
+// que usaba `puedeAjustarJornada`. Verificado contra el código y los datos el 2026-09-16.)
 router.post('/:route_id/occasional-visit',
     verifyToken,
     updateRouteLimiter,

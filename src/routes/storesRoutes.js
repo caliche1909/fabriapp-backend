@@ -71,10 +71,31 @@ router.delete('/:storeId/routes/:routeId',
     storesController.removeStoreFromRoute
 );
 
+/**
+ * 🛡️ Limitador PROPIO para marcar visitas. Antes usaba `createGeneralLimiter()` sin opciones, y
+ * eso eran DOS problemas a la vez:
+ *
+ *   1. **60/hora, por debajo del pico real.** Medido el 2026-09-18 sobre toda la historia, el
+ *      vendedor que más marcó en un día hizo **63 paradas**. Y la cola se vacía **de golpe** tras
+ *      una jornada sin señal, así que las 63 llegaban dentro de la misma hora: las tres últimas
+ *      se llevaban un 429 y —hasta el arreglo de §15— quedaban rechazadas para siempre.
+ *   2. **El cupo estaba COMPARTIDO.** Los limitadores se reutilizan por opciones idénticas
+ *      (`limitersCache`), así que estas mismas 60 las gastaban también crear tienda, actualizar
+ *      tienda, vincular y desvincular de ruta. Marcar competía con todo eso.
+ *
+ * 200/hora es algo más de 3× el pico real, con el cupo para él solo.
+ */
+const marcarVisitaLimiter = createGeneralLimiter({
+    windowMs: 60 * 60 * 1000,  // 1 hora
+    maxByIP: 30,               // solo rige sin sesión, y aquí `verifyToken` va antes
+    maxByUser: 200,            // 3× el pico real de un vendedor en un día (63)
+    message: "Límite de marcado de visitas alcanzado"
+});
+
 // 📌 Ruta para actualizar el estado de visita de una tienda
 router.put('/update-store-as-visited/:store_id',
     verifyToken,
-    createGeneralLimiter(),
+    marcarVisitaLimiter,
     storesController.updateStoreAsVisited
 );
 

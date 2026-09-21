@@ -55,6 +55,14 @@ const CODIGOS = {
     YA_REGISTRADO: 'YA_REGISTRADO',             // mismo client_operation_id: es nuestro propio reintento
     VISITA_YA_CERRADA: 'VISITA_YA_CERRADA',     // la parada ya estaba visited/completed
 
+    // 🚫 No quedaba nada que anular: no había reporte para esa visita, o ya estaba anulado.
+    //
+    // 🔴 ES UN ÉXITO, NO UN ERROR, y por eso vive en este bloque. El objetivo de la anulación es
+    // "que esta parada quede libre para vender", y eso ya se cumple. Tratarlo como fallo dejaría
+    // la operación reintentándose para siempre y —peor— bloquearía la venta que depende de ella
+    // (§14.5). Ver OFFLINE-CAMPO.md §14.
+    NADA_QUE_ANULAR: 'NADA_QUE_ANULAR',
+
     // 🧾 La venta LLEGÓ, pero ya no cabía: se guardó APARTADA (`deleted_at` + `conflict_reason`).
     //
     // 🔴 Para la cola esto es una ENTREGA, no un fallo: la operación está en Postgres, que es la
@@ -67,6 +75,22 @@ const CODIGOS = {
     NO_ES_ENCARGADO: 'NO_ES_ENCARGADO',
     PRODUCTO_NO_DISPONIBLE: 'PRODUCTO_NO_DISPONIBLE',
     VISITA_NO_EXISTE: 'VISITA_NO_EXISTE',
+
+    // 🧭 La ruta SÍ está iniciada, pero esta tienda no entró en la foto del día: se vinculó
+    // DESPUÉS de iniciarla. Es el mismo caso que la tarjeta ya pinta como `sin_parada`, dicho
+    // ahora por el servidor.
+    //
+    // Se separa de `VISITA_NO_EXISTE` porque el remedio es OTRO y es concreto: el botón
+    // "Ajustar" de la ruta. Mientras los dos casos compartieron código compartieron también
+    // mensaje —"Primero debes iniciar la ruta"—, que con la ruta ya iniciada es falso y manda al
+    // vendedor a un sitio donde no hay nada que hacer. Por ahí se colaron las 5 ventas sin parada
+    // del 15-sep. Ver OFFLINE-CAMPO.md §16.
+    //
+    // 🔴 NO es "reparable" para la cola de reenvío, aunque una persona pueda quitar el obstáculo.
+    // "Ajustar" solo actúa sobre las jornadas de HOY en adelante, así que un marcado encolado que
+    // se sincronizara al día siguiente se quedaría esperando para siempre un remedio que ya no
+    // existe. Por eso el servidor tampoco lo emite cuando el trabajo es de un día anterior.
+    SIN_PARADA: 'SIN_PARADA',
     VENTA_YA_REGISTRADA: 'VENTA_YA_REGISTRADA', // ya hay venta para esa visita (bloquea el no-venta)
     NO_VENTA_YA_REGISTRADA: 'NO_VENTA_YA_REGISTRADA',
     DATOS_INVALIDOS: 'DATOS_INVALIDOS',

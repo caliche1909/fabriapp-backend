@@ -1,5 +1,5 @@
 const { stores, users, store_visits, roles } = require('../models');
-const { autorizarSobreLaVisita } = require('../utils/storeVisits');
+const { autorizarSobreLaVisita, diagnosticarFaltaDeParada, SQL_TIENE_REPORTE_VIVO } = require('../utils/storeVisits');
 const {
     CODIGOS, leerCamposDeSincronizacion, buscarOperacionPrevia, esChoqueDeIdempotencia,
 } = require('../utils/sincronizacion');
@@ -753,7 +753,12 @@ module.exports = {
             // día quedándose con la visita más avanzada.
             const todayVisits = await store_visits.findAll({
                 where: { route_id: rid, visit_day: hoy },
-                attributes: ['id', 'store_id', 'status'],
+                attributes: [
+                    'id', 'store_id', 'status',
+                    // 🚫 La tarjeta también ofrece "Punto de venta" en `completed`: sin esto no
+                    // puede saber si esa parada se cerró con venta o con un reporte vivo (§14.9).
+                    [store_visits.sequelize.literal(SQL_TIENE_REPORTE_VIVO), 'has_no_sale_report'],
+                ],
                 raw: true,
             });
 
@@ -882,6 +887,9 @@ module.exports = {
                     ? dayVisit.status
                     : (hayJornadaHoy ? 'sin_parada' : 'pending');
                 storeData.current_visit_id = dayVisit ? dayVisit.id : null;
+                // Mismo nombre de familia que los dos de arriba: es un dato de la visita del día,
+                // no de la tienda. Sin parada no hay reporte que valga.
+                storeData.current_visit_has_no_sale_report = dayVisit ? Boolean(dayVisit.has_no_sale_report) : false;
                 // Contexto de ruta: el frontend usa route_id como la ruta abierta.
                 storeData.route_id = rid;
 
@@ -1584,13 +1592,29 @@ module.exports = {
 
             if (!visitRecord) {
                 await transaction.rollback();
+                // 🧭 El motivo VERDADERO, no "inicia la ruta" para todo. Son tres casos con tres
+                // remedios distintos y el vendedor está frente a la tienda; decirle el que no es
+                // lo manda a buscarse la vida por otro lado, que es literalmente lo que pasó el
+                // 15-sep. La distinción vive en `utils/storeVisits.js`, junto a las demás reglas
+                // de las paradas, para que ningún controlador vuelva a inventarse qué significa
+                // "sin parada" — el mismo motivo por el que `SQL_TIENE_REPORTE_VIVO` está ahí.
+                // La venta ocasional comparte el CÓDIGO (`SIN_PARADA`), con su propio mensaje.
+                // Ver OFFLINE-CAMPO.md §16.
+                //
+                // Va DESPUÉS del rollback a propósito: es una lectura aparte, no necesita la
+                // transacción, y así no se retiene la conexión mientras se diagnostica.
+                const motivo = await diagnosticarFaltaDeParada({
+                    storeId: store.id,
+                    routeId: bodyRouteId,
+                    companyId: req.user.companyId,
+                    visitDay: dia_objetivo,
+                    esDeHoy,
+                });
                 return res.status(409).json({
                     success: false,
                     status: 409,
-                    code: CODIGOS.VISITA_NO_EXISTE,
-                    message: esDeHoy
-                        ? 'Esta tienda no tiene visitas pendientes para el día de hoy. Primero debes iniciar la ruta.'
-                        : `Esta tienda no tenía una visita programada el ${dia_objetivo}.`,
+                    code: motivo.code,
+                    message: motivo.message,
                 });
             }
 

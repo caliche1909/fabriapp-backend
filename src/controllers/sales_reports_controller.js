@@ -335,6 +335,114 @@ module.exports = {
     },
 
     /**
+     * 📌 GET /api/sales/detail/:sale_id
+     * Una venta con el detalle de sus líneas. Alimenta el cajón de detalle del Cuadre y del
+     * Historial, y más adelante la reimpresión del ticket (`IMPRESION-BLUETOOTH.md` §13, punto 6).
+     *
+     * 🔴 ES EL PRIMER LECTOR DE `sale_items`. Hasta hoy esa tabla solo se escribía: lo único que
+     * alguien consultaba era un `COUNT(*)` en el cuadre de conflictos.
+     *
+     * ⚠️ QUE `items` VENGA VACÍO NO ES UN ERROR, Y HAY QUE CONTARLO EN PANTALLA. `sale_items`
+     * empezó a escribirse a mediados de agosto de 2026. Medido sobre producción el 2026-09-15:
+     * de 12.156 ventas solo 1.117 (9,2 %) tienen líneas — septiembre 677/677, agosto 440/1.291,
+     * julio y antes CERO. Una venta anterior a ese corte devuelve `items: []` porque su detalle
+     * **nunca existió**, no porque falle nada. Como toda venta exige al menos un producto para
+     * poder registrarse, `items: []` significa exactamente eso y no hace falta ninguna bandera.
+     *
+     * 🔴 NO DEVUELVE `unit_cost`, y es deliberado. Es el costo de fabricación: el margen del
+     * negocio. Este detalle lo abre un vendedor desde el Cuadre, y el ticket impreso saldrá de
+     * aquí. No hay ningún motivo para que ese dato viaje al teléfono de nadie.
+     *
+     * 🔴 SÍ DEVUELVE LAS APARTADAS, y también es deliberado. Una venta apartada por conflicto
+     * nace con `deleted_at` puesto, así que el filtro habitual la escondería — pero **el vendedor
+     * ya cobró ese dinero** y quien tenga que cuadrarla necesita ver qué llevaba. Se admite
+     * exactamente el mismo criterio que usa `getConflictSales`: `conflict_reason IS NOT NULL`, que
+     * solo puede estar puesto porque lo pusimos nosotros. Una venta borrada por una persona (el
+     * día que exista anular) seguirá oculta, porque esa no tendría `conflict_reason`.
+     *
+     * ⚠️ No se filtra `st.deleted_at` ni el estado del vendedor: una venta del pasado tiene que
+     * poder consultarse aunque después se borrara la tienda o el vendedor dejara la empresa. El
+     * aislamiento multi-tenant lo da `sa.company_id`, que sale de la SESIÓN y nunca del cliente.
+     */
+    async getSaleDetail(req, res) {
+        try {
+            const cid = req.user.companyId;
+            const crudo = req.params.sale_id;
+
+            // ⚠️ Se valida el TEXTO antes de convertirlo, no el resultado: `parseInt('1.5')` da 1,
+            // así que pedir `/detail/1.5` devolvía tan campante la venta 1. Un identificador que
+            // no es un identificador no puede resolverse a OTRA venta.
+            const saleId = /^\d+$/.test(crudo) ? Number.parseInt(crudo, 10) : NaN;
+
+            if (!Number.isInteger(saleId) || saleId <= 0) {
+                return res.status(400).json({
+                    success: false,
+                    status: 400,
+                    message: 'Identificador de venta inválido.',
+                });
+            }
+
+            // La cabecera se pide primero: además de traer los datos, ES la comprobación de
+            // acceso. Si no aparece, no se consultan las líneas.
+            const [venta] = await sequelize.query(
+                `SELECT sa.id, sa.sale_date, sa.status,
+                        sa.subtotal::float8        AS subtotal,
+                        sa.discount_amount::float8 AS discount_amount,
+                        sa.tax_amount::float8      AS tax_amount,
+                        sa.total_amount::float8    AS total_amount,
+                        sa.visit_id, sa.route_id,
+                        sa.conflict_reason,
+                        (sa.conflict_reason IS NOT NULL) AS apartada,
+                        st.id AS store_id, st.name AS store_name,
+                        st.address AS store_address, st.phone AS store_phone,
+                        u.id AS user_id,
+                        TRIM(u.first_name || ' ' || COALESCE(u.last_name, '')) AS vendedor,
+                        pm.id AS payment_method_id, pm.name AS payment_method
+                   FROM sales sa
+                   JOIN stores st ON st.id = sa.store_id
+                   JOIN users u ON u.id = sa.user_id
+                   JOIN payment_methods pm ON pm.id = sa.payment_method_id
+                  WHERE sa.id = :sale_id
+                    AND sa.company_id = :cid
+                    AND (sa.deleted_at IS NULL OR sa.conflict_reason IS NOT NULL)`,
+                { type: QueryTypes.SELECT, replacements: { sale_id: saleId, cid } }
+            );
+
+            if (!venta) {
+                // Mismo 404 exista o no la venta en OTRA compañía: que no se pueda averiguar qué
+                // identificadores existen probando números.
+                return res.status(404).json({
+                    success: false,
+                    status: 404,
+                    message: 'La venta no existe o no pertenece a tu compañía.',
+                });
+            }
+
+            // `quantity` es DECIMAL(14,3) y los precios DECIMAL(14,2): sin el cast, Sequelize los
+            // entrega como TEXTO y el cliente acabaría concatenando en vez de sumando.
+            const items = await sequelize.query(
+                `SELECT si.product_id, si.product_name,
+                        si.quantity::float8    AS quantity,
+                        si.unit_price::float8  AS unit_price,
+                        si.total_price::float8 AS total_price
+                   FROM sale_items si
+                  WHERE si.sale_id = :sale_id
+                  ORDER BY si.id`,
+                { type: QueryTypes.SELECT, replacements: { sale_id: saleId } }
+            );
+
+            return res.status(200).json({
+                success: true,
+                status: 200,
+                data: { venta, items },
+            });
+        } catch (error) {
+            console.error('Error en getSaleDetail (detalle de venta):', error);
+            return res.status(500).json({ success: false, message: 'Error al obtener el detalle de la venta' });
+        }
+    },
+
+    /**
      * 📌 GET /api/sales/reports/no-sale?from&to
      * Reportes de no-venta agregados por categoría y por razón.
      */
@@ -344,7 +452,11 @@ module.exports = {
             const tz = req.user.companyTimezone || DEFAULT_TZ;
             const { from, to } = await resolveRange(cid, tz, req.query.from, req.query.to);
             const repl = { cid, tz, from, to };
-            const WHERE = `r.company_id = :cid AND (r.created_at AT TIME ZONE :tz)::date BETWEEN :from AND :to`;
+            // 🚫 `annulled_at IS NULL`: un reporte anulado —el tendero acabó comprando— no es una
+            // no-venta y no puede seguir contando en el total ni en el desglose. Las tres
+            // consultas de abajo comparten esta constante, así que no pueden separarse.
+            // Ver OFFLINE-CAMPO.md §14.7.
+            const WHERE = `r.company_id = :cid AND r.annulled_at IS NULL AND (r.created_at AT TIME ZONE :tz)::date BETWEEN :from AND :to`;
 
             const [tot] = await sequelize.query(
                 `SELECT COUNT(*)::int AS total FROM store_no_sale_reports r WHERE ${WHERE}`,
@@ -402,7 +514,9 @@ module.exports = {
             // Filtros opcionales (todos parametrizados para evitar inyección).
             const { categoryId, reasonId, sellerId, storeId } = req.query;
             const repl = { cid, tz, from, to, limit, offset };
-            let WHERE = `r.company_id = :cid AND (r.created_at AT TIME ZONE :tz)::date BETWEEN :from AND :to`;
+            // 🚫 `annulled_at IS NULL`, igual que en el resumen: el detalle tiene que cuadrar con
+            // los totales que lo abren. Ver OFFLINE-CAMPO.md §14.7.
+            let WHERE = `r.company_id = :cid AND r.annulled_at IS NULL AND (r.created_at AT TIME ZONE :tz)::date BETWEEN :from AND :to`;
             if (categoryId) { WHERE += ' AND r.category_id = :categoryId'; repl.categoryId = categoryId; }
             if (reasonId) { WHERE += ' AND r.reason_id = :reasonId'; repl.reasonId = reasonId; }
             if (sellerId) { WHERE += ' AND r.user_id = :sellerId'; repl.sellerId = sellerId; }
@@ -636,7 +750,10 @@ module.exports = {
                  JOIN users u ON u.id = sv.user_id
                  LEFT JOIN sales sa ON sa.visit_id = sv.id AND sa.deleted_at IS NULL AND sa.status = 'completed'
                  LEFT JOIN payment_methods pm ON pm.id = sa.payment_method_id
-                 LEFT JOIN store_no_sale_reports nsr ON nsr.visit_id = sv.id
+                 -- 🚫 El motivo solo se enseña si el reporte sigue VIVO. La condición va en el ON
+                 -- y no en el WHERE: en un LEFT JOIN, filtrar fuera lo vuelve INNER y
+                 -- desaparecerían las visitas que nunca tuvieron reporte (§14.7).
+                 LEFT JOIN store_no_sale_reports nsr ON nsr.visit_id = sv.id AND nsr.annulled_at IS NULL
                  LEFT JOIN no_sale_reasons rs ON rs.id = nsr.reason_id
                  LEFT JOIN no_sale_categories c ON c.id = nsr.category_id
                  LEFT JOIN referencia ref ON ref.store_id = sv.store_id
@@ -718,7 +835,9 @@ module.exports = {
                            ref.promedio AS estimado
                     FROM store_visits sv
                     JOIN stores st ON st.id = sv.store_id
-                    LEFT JOIN store_no_sale_reports nsr ON nsr.visit_id = sv.id
+                    -- 🚫 Mismo motivo que arriba: va en el ON para no volver INNER el LEFT y
+                    -- perder las paradas pendientes, que no tienen reporte (§14.7).
+                    LEFT JOIN store_no_sale_reports nsr ON nsr.visit_id = sv.id AND nsr.annulled_at IS NULL
                     LEFT JOIN referencia ref ON ref.store_id = sv.store_id
                     WHERE st.company_id = :cid
                       AND (sv.date AT TIME ZONE :tz)::date BETWEEN :from AND :to

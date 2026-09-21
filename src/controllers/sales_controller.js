@@ -287,7 +287,12 @@ module.exports = {
                     if (!permiso.autorizado) {
                         conflicto = { code: CODIGOS.NO_ES_ENCARGADO, message: `${permiso.mensaje} La venta se guardó como incidencia.` };
                     } else {
-                        const existingNoSale = await store_no_sale_reports.findOne({ where: { visit_id }, transaction: t });
+                        // 🚫 SOLO LOS REPORTES VIVOS APARTAN LA VENTA. `annulled_at: null` es la
+                        // línea entera de la que depende que anular sirva para algo: si se quita,
+                        // el vendedor anula el reporte, vende, y la venta se aparta igual — el
+                        // problema original intacto y más difícil de explicar.
+                        // Ver OFFLINE-CAMPO.md §14.7.
+                        const existingNoSale = await store_no_sale_reports.findOne({ where: { visit_id, annulled_at: null }, transaction: t });
                         if (existingNoSale) {
                             conflicto = { code: CODIGOS.NO_VENTA_YA_REGISTRADA, message: 'Esa parada ya se había cerrado con un reporte de no compra; la venta se guardó como incidencia.' };
                         }

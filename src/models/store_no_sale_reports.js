@@ -24,11 +24,19 @@ module.exports = function(sequelize, DataTypes) {
       validate: {
         // 🔍 VALIDACIÓN: Asegurar que no haya reportes duplicados por visita
         // Ejemplo de uso: Al crear un reporte desde una visita específica
+        //
+        // 🔴 SOLO CUENTAN LOS REPORTES VIVOS (`annulled_at IS NULL`), igual que el índice
+        // `idx_unique_visit_report`. Sin el filtro, este validador rechazaría el reporte
+        // nuevo de una visita cuyo reporte anterior YA se anuló —el caso del tendero que se
+        // arrepiente dos veces— y lo haría ANTES de llegar a la base, así que el índice
+        // parcial no llegaría ni a consultarse. Los dos tienen que decir lo mismo.
+        // Ver OFFLINE-CAMPO.md §14.
         async isUniqueVisitReport(value) {
           if (value !== null && value !== undefined) {
             const existingReport = await StoreNoSaleReports.findOne({
               where: {
                 visit_id: value,
+                annulled_at: null,
                 id: { [sequelize.Sequelize.Op.ne]: this.id || 0 }
               }
             });
@@ -194,6 +202,28 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.DATE,
       allowNull: true,
       comment: 'Cuándo llegó al servidor si venía de la cola offline. NULL = se registró en el momento.'
+    },
+    // 🚫 ANULACIÓN. El tendero dijo que no, el vendedor lo reportó, y al rato el tendero lo llamó
+    // y sí le compró. El reporte NO se borra: se marca, y deja de contar en todas partes.
+    //
+    // 🔴 NO se usa `paranoid` para esto. Cubriría solo las 2 lecturas que van por modelo; las
+    // otras 7 son SQL crudo (informes, Cuadre, oportunidad perdida) y seguirían contando el
+    // reporte anulado sin que nadie se entere. La lista completa está en OFFLINE-CAMPO.md §14.7.
+    annulled_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      comment: 'Cuándo se anuló para poder registrar la venta. NULL = reporte vivo.'
+    },
+    annulled_by: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      references: { model: 'users', key: 'id' },
+      comment: 'Quién lo anuló. Es el rastro que un borrado no dejaría.'
+    },
+    annulled_operation_id: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      comment: 'UUID de la anulación en el cliente (idempotencia de la cola offline).'
     }
   }, {
     sequelize,
@@ -272,12 +302,18 @@ module.exports = function(sequelize, DataTypes) {
       // migración `20260814120000-drop-duplicate-no-sale-visit-index`.
       // El único de abajo cubre las búsquedas por visita Y garantiza la regla
       // "un solo reporte de no-venta por visita". No lo dupliques otra vez.
+      // 🔴 La regla es "un solo reporte VIVO por visita", no "uno por visita". El
+      // `annulled_at: null` NO es decorativo: sin él, la tienda que se arrepiente
+      // otra vez —anulado el reporte para vender, y al final no compra— se quedaría
+      // sin poder reportarse de nuevo. Se volvió parcial en la migración
+      // `20260915120000-add-annulment-to-no-sale-reports`.
       {
         name: "idx_unique_visit_report",
         unique: true,
         fields: [{ name: "visit_id" }],
         where: {
-          visit_id: { [sequelize.Sequelize.Op.ne]: null }
+          visit_id: { [sequelize.Sequelize.Op.ne]: null },
+          annulled_at: null
         }
       }
     ]

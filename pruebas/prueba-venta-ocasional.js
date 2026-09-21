@@ -128,10 +128,18 @@ const agregar = async ({ routeId, storeId, user }) => {
         const cuantas = await store_visits.count({ where: { route_id: norte.id, store_id: tiendaSur.id, visit_day: hoy } });
         assert(cuantas === 1, `sigue habiendo UNA sola parada de esa tienda (${cuantas})`);
 
-        // ── 5) Tienda que SÍ es miembro → no se marca como ocasional ──────────
+        // ── 5) Tienda que SÍ es miembro → se rechaza y se remite a "Ajustar" ──
+        //
+        // 🔴 Esta prueba afirmaba lo CONTRARIO hasta el 2026-09-18: una tienda de la ruta se
+        // agregaba como `in-route` y la venta ocasional le creaba la parada. Se cambió a
+        // propósito (paso S2): mezclar los dos caminos fue por donde salieron las 5 ventas sin
+        // parada del 15-sep. Ver OFFLINE-CAMPO.md §16.3.
         const r5 = await agregar({ routeId: norte.id, storeId: tiendaSinParada.id, user: usuario });
-        assert(r5.statusCode === 201 && r5.body?.visita?.visit_type === 'in-route',
-            'una tienda que SÍ pertenece a la ruta se agrega como `in-route`, no como ocasional');
+        assert(r5.statusCode === 409 && r5.body?.code === 'SIN_PARADA',
+            `una tienda que SÍ pertenece a la ruta se rechaza con SIN_PARADA ("${r5.body?.message}")`);
+        assert(/Ajustar/.test(r5.body?.message || ''), 'y el mensaje la remite al botón "Ajustar"');
+        const sinCrear = await store_visits.count({ where: { route_id: norte.id, store_id: tiendaSinParada.id, visit_day: hoy } });
+        assert(sinCrear === 0, 'no se le creó ninguna parada por la puerta de atrás');
 
         // ── 6) Ajustar NO debe ofrecer borrar la ocasional ────────────────────
         const resAj = resFalso();
