@@ -47,13 +47,33 @@ const createSmartRateLimit = (options) => {
     const limiter = rateLimit({
         windowMs,
         
-        // 🎯 CLAVE INTELIGENTE: Decide qué usar como identificador
+        /**
+         * 🎯 CLAVE: por usuario si está autenticado, por IP si no.
+         *
+         * 🔴 AVISO GRANDE — EN CLOUD RUN LA RAMA DE LA IP **NO SEPARA A NADIE** (visto el
+         * 2026-09-21). `src/server.js` no hace `app.set('trust proxy', …)`, así que Express
+         * **ignora la cabecera `X-Forwarded-For`** y `req.ip` es la dirección del socket, que
+         * detrás del proxy de Cloud Run es la MISMA para todas las peticiones del mundo.
+         *
+         * Comprobado en local con el propio Express: con `X-Forwarded-For: 201.45.7.9` y sin
+         * `trust proxy`, `req.ip` devuelve `::ffff:127.0.0.1`.
+         *
+         * Consecuencia: **todos los cupos "por IP" son en realidad un único cupo global**. El
+         * login se llevó la peor parte (ver `createLoginLimiter`), pero afecta a cualquier
+         * limitador que actúe sobre peticiones sin autenticar.
+         *
+         * ⚠️ No se arregla aquí de corrido porque el número de saltos de `trust proxy` **hay que
+         * comprobarlo contra producción**, no adivinarlo: según haya o no balanceador delante, la
+         * IP del cliente está en una posición distinta de `X-Forwarded-For`, y equivocarse
+         * significa o seguir agrupando a todos, o fiarse de una cabecera que el cliente puede
+         * falsificar. El plan de verificación está en `PENDING-IMPLEMENTATION.md`.
+         */
         keyGenerator: (req) => {
             // 1. Si hay usuario autenticado, usar su ID
             if (req.user && req.user.id) {
                 return `user:${req.user.id}`;
             }
-            
+
             // 2. Si es endpoint público, usar IP
             return `ip:${req.ip}`;
         },
@@ -139,13 +159,36 @@ const createSmartRateLimit = (options) => {
 // 🏗️ CONFIGURACIONES PREDEFINIDAS PARA DIFERENTES TIPOS DE ENDPOINTS
 
 // 🔐 LOGIN - Muy restrictivo por IP
+/**
+ * 🔐 LOGIN.
+ *
+ * 🔴 SOLO SE CUENTAN LOS INTENTOS FALLIDOS, y ese es el cambio de fondo del 2026-09-21.
+ *
+ * Antes se contaba **también el login correcto** (`skipSuccessfulRequests` sin poner = `false`),
+ * así que el limitador no racionaba ataques: racionaba **entradas legítimas**. Con 5 por ventana y
+ * la sesión durando 16 h, los vendedores entran una vez al día cada uno —más el supervisor— y en
+ * la mañana, cuando todos arrancan a la vez, el cupo se agotaba en minutos. Al vendedor le salía
+ * "demasiados intentos" **en su primer intento y con la contraseña correcta**.
+ *
+ * Un limitador de login existe para frenar a quien **adivina contraseñas**. Quien acierta no está
+ * adivinando: no hay razón para cobrarle. Por eso ahora el cupo lo gastan únicamente las
+ * respuestas de error (el login devuelve **401** cuando las credenciales no valen), y por eso el
+ * número pudo subir de 5 a 20 sin aflojar la defensa real — al contrario, 20 fallos seguidos es
+ * una señal mucho más limpia que 5 peticiones de cualquier clase.
+ *
+ * ⚠️ ESTO NO ARREGLA EL PROBLEMA DE FONDO, que es de QUIÉN se cuenta. Ver el aviso de
+ * `keyGenerator` en `createSmartRateLimit`: sin `trust proxy`, en Cloud Run **todos los usuarios
+ * comparten el mismo cubo**. Mientras eso siga así, este cupo es del conjunto de la plataforma y
+ * no de cada quien. Está documentado en `PENDING-IMPLEMENTATION.md`.
+ */
 const createLoginLimiter = (customOptions = {}) => {
     return createSmartRateLimit({
         windowMs: 15 * 60 * 1000,     // 15 minutos
-        maxByIP: 5,                   // 5 intentos por IP
-        maxByUser: 5,                 // 5 intentos por usuario (no debería llegar aquí)
+        maxByIP: 20,                  // 20 intentos FALLIDOS por ventana
+        maxByUser: 20,                // (el login no va autenticado; no debería llegar aquí)
         message: "Demasiados intentos de login, intente más tarde",
-        skipFailedRequests: false,    // Contar intentos fallidos
+        skipSuccessfulRequests: true, // 🔴 un login correcto NO gasta cupo
+        skipFailedRequests: false,    // los fallidos sí, que son los que importan
         ...customOptions
     });
 };
