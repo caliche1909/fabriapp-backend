@@ -1,6 +1,6 @@
 # `server/pruebas` — baterías de aserciones del backend
 
-**35 archivos.** No son pruebas unitarias con un framework: son scripts de Node que ejecutan los
+**36 archivos.** No son pruebas unitarias con un framework: son scripts de Node que ejecutan los
 **controladores reales** contra la base de datos y van imprimiendo `OK` / `FALLA`. Cada uno termina
 con una línea `=== N OK · M FALLAS ===`.
 
@@ -16,7 +16,12 @@ aquí el **2026-09-11** porque esa carpeta se borra sola.
 > ventas, mueven stock y limpian lo que crean. **Jamás** contra una base que alguien esté usando:
 > ya destruyeron jornadas reales dos veces.
 
-Por eso **las 35** empiezan con `require('./_guardia-bd')`, que **se niega a arrancar**
+> 🟢 **UNA EXCEPCIÓN: `prueba-limitador-login.js` NO toca la base de datos.** No importa modelos,
+> no abre Sequelize y no lee el `.env`: levanta un Express de mentira en un puerto libre y le
+> cuelga el limitador real. Es la única sin `_guardia-bd`, y se puede correr siempre y en
+> cualquier máquina. Si escribes otra que tampoco toque la base, sigue ese patrón.
+
+Por eso **las otras 35** empiezan con `require('./_guardia-bd')`, que **se niega a arrancar**
 si `server/.env` no apunta a `localhost`, o si la base se llama `postgres` (el nombre de la de
 producción). No quites esa línea.
 

@@ -23,10 +23,18 @@ const createSmartRateLimit = (options) => {
         skipSuccessfulRequests = false,
         skipFailedRequests = false,
         enableOwnerBonus = true,      // Los OWNERS tienen límites más generosos
-        trustedIPs = []               // IPs confiables (tu equipo)
+        trustedIPs = [],              // IPs confiables (tu equipo)
+        clavePorCorreo = false        // Contar por `body.email` en vez de por IP. Ver `keyGenerator`.
     } = options;
 
     // 🎯 CREAR CLAVE ÚNICA PARA EL CACHE
+    //
+    // 🔴 TODA OPCIÓN NUEVA TIENE QUE ENTRAR AQUÍ. Los limitadores se reutilizan cuando sus
+    // opciones coinciden, así que una opción que no forme parte de esta clave hace que dos
+    // limitadores DISTINTOS acaben siendo el mismo objeto y compartan cupo sin que nadie lo note.
+    // Ya ha mordido dos veces en este repositorio —marcar visita compartía cupo con crear y
+    // actualizar tienda, y anular un reporte se lo habría robado a los reportes—; los dos casos
+    // están contados en `storesRoutes.js` y en `store_no_sale_reports_routes.js`.
     const cacheKey = JSON.stringify({
         windowMs,
         maxByIP,
@@ -35,7 +43,8 @@ const createSmartRateLimit = (options) => {
         skipSuccessfulRequests,
         skipFailedRequests,
         enableOwnerBonus,
-        trustedIPs: trustedIPs.sort()
+        trustedIPs: trustedIPs.sort(),
+        clavePorCorreo
     });
 
     // 🔄 VERIFICAR SI YA EXISTE EN CACHE
@@ -74,7 +83,29 @@ const createSmartRateLimit = (options) => {
                 return `user:${req.user.id}`;
             }
 
-            // 2. Si es endpoint público, usar IP
+            // 2. 🎯 Sin sesión pero con un correo en el cuerpo (login): contar por ESE correo.
+            //
+            // Es la clave semánticamente correcta para lo que se quiere frenar —alguien adivinando
+            // la contraseña de UNA cuenta— y además esquiva el problema de la IP: da igual que
+            // `req.ip` no distinga a nadie, porque cada correo lleva su propia cuenta.
+            //
+            // 🔴 SE NORMALIZA, Y NO ES COSMÉTICO: sin recortar y sin pasar a minúsculas,
+            // `JUAN@x.com` y `juan@x.com` serían cubos distintos, y bastaría con ir cambiando
+            // mayúsculas para multiplicar el cupo. Es el agujero evidente de esta idea, y se
+            // cierra aquí.
+            //
+            // Requiere que `express.json()` ya haya pasado, y lo hace: va montado a nivel de
+            // aplicación en `server.js` antes que cualquier router.
+            if (clavePorCorreo) {
+                const correo = typeof req.body?.email === 'string'
+                    ? req.body.email.trim().toLowerCase()
+                    : '';
+                if (correo) return `correo:${correo}`;
+                // Sin correo utilizable (cuerpo vacío o malformado) se cae a la IP: mejor un cupo
+                // compartido que ninguno.
+            }
+
+            // 3. Si es endpoint público, usar IP
             return `ip:${req.ip}`;
         },
         
@@ -176,10 +207,21 @@ const createSmartRateLimit = (options) => {
  * número pudo subir de 5 a 20 sin aflojar la defensa real — al contrario, 20 fallos seguidos es
  * una señal mucho más limpia que 5 peticiones de cualquier clase.
  *
- * ⚠️ ESTO NO ARREGLA EL PROBLEMA DE FONDO, que es de QUIÉN se cuenta. Ver el aviso de
- * `keyGenerator` en `createSmartRateLimit`: sin `trust proxy`, en Cloud Run **todos los usuarios
- * comparten el mismo cubo**. Mientras eso siga así, este cupo es del conjunto de la plataforma y
- * no de cada quien. Está documentado en `PENDING-IMPLEMENTATION.md`.
+ * 🎯 Y SE CUENTA POR CUENTA, NO POR IP (`clavePorCorreo`, 2026-09-24). Ése era el problema de
+ * fondo: sin `trust proxy`, `req.ip` no distingue a nadie en Cloud Run, así que los vendedores se
+ * gastaban el cupo unos a otros. Contando por el correo intentado, **cada cuenta lleva el suyo** y
+ * deja de importar que la IP no sirva. Es además lo que de verdad se quiere proteger: que nadie
+ * adivine la contraseña de *una* cuenta.
+ *
+ * ⚠️ La contrapartida, asumida: alguien que conozca el correo de un vendedor puede gastarle los 20
+ * fallos y dejarlo fuera **15 minutos**. Se acepta porque antes se podía hacer lo mismo contra
+ * TODOS a la vez, que es peor; porque sólo cuentan los fallos; y porque la ventana es corta.
+ *
+ * ✅ No abre enumeración de usuarios: el 429 llega igual exista o no la cuenta, porque se cuentan
+ * los fallos de cualquier correo. El trabajo del 2026-09-15 contra la enumeración sigue intacto.
+ *
+ * ⚠️ Lo que sigue pendiente es `trust proxy` —el resto de cupos "por IP" continúan sin separar a
+ * nadie— y que el `MemoryStore` es por instancia. Ambos en `PENDING-IMPLEMENTATION.md`.
  */
 const createLoginLimiter = (customOptions = {}) => {
     return createSmartRateLimit({
@@ -189,6 +231,7 @@ const createLoginLimiter = (customOptions = {}) => {
         message: "Demasiados intentos de login, intente más tarde",
         skipSuccessfulRequests: true, // 🔴 un login correcto NO gasta cupo
         skipFailedRequests: false,    // los fallidos sí, que son los que importan
+        clavePorCorreo: true,         // 🎯 y se cuentan POR CUENTA, no por IP (ver abajo)
         ...customOptions
     });
 };
