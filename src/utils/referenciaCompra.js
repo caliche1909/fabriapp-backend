@@ -49,10 +49,13 @@
  * sola vez y el plan pasa a hash join: **40 ms, 15× más rápido**. Si algún día se
  * quita esta palabra, el rendimiento se desploma en silencio.
  */
-function cteReferenciaTienda({ soloRuta = false } = {}) {
-    const deLaRuta = soloRuta
-        ? 'AND sv.store_id IN (SELECT store_id FROM routes_stores WHERE route_id = :rid)'
-        : '';
+function cteReferenciaTienda({ soloRuta = false, soloTiendas = false } = {}) {
+    // Los dos acotan A QUÉ TIENDAS se agrega, nunca CÓMO se calcula. El promedio de una tienda
+    // sale solo de sus propias filas, así que filtrar las demás no mueve ni un valor: por eso
+    // caben las dos variantes sin que haya dos definiciones que mantener.
+    let deLaRuta = '';
+    if (soloRuta) deLaRuta = 'AND sv.store_id IN (SELECT store_id FROM routes_stores WHERE route_id = :rid)';
+    else if (soloTiendas) deLaRuta = 'AND sv.store_id IN (:ids)';
     return `
     ref_reciente AS (
         SELECT sv.store_id, AVG(sv.sale_amount) AS promedio, COUNT(*)::int AS n
@@ -127,4 +130,47 @@ async function referenciaDeRuta(sequelize, { routeId, companyId, tz }) {
     }]));
 }
 
-module.exports = { CTE_REFERENCIA_TIENDA, referenciaDeRuta };
+/**
+ * Lo mismo, pero para una LISTA de tiendas concreta.
+ *
+ * 🔑 POR QUÉ HACE FALTA, SI YA ESTÁ `referenciaDeRuta`. El cajón de visitas del día no pinta las
+ * tiendas de la ruta: pinta **las paradas de la jornada**, y no son el mismo conjunto. Una
+ * **visita ocasional** es de una tienda que NO pertenece a la ruta, así que con el filtro por
+ * ruta se caería del mapa — y "no está en el mapa" significa *"nunca ha comprado"*. La fila
+ * diría **"Sin compras"** de una tienda que compra, que es justo la clase de mentira silenciosa
+ * que este módulo evita en todo lo demás.
+ *
+ * Misma definición, mismo SQL, otro filtro de alcance. Ver `cteReferenciaTienda`.
+ *
+ * ⚠️ Igual que la de la ruta: **una tienda que nunca ha comprado no sale en el mapa**, y quien lo
+ * pinte tiene que distinguir eso de comprar cero.
+ */
+async function referenciaDeTiendas(sequelize, { storeIds, companyId, tz }) {
+    const ids = [...new Set((storeIds || []).map(Number).filter(Number.isInteger))];
+    if (ids.length === 0) return new Map();
+
+    const [{ hoy }] = await sequelize.query(
+        `SELECT (now() AT TIME ZONE :tz)::date AS hoy`,
+        { type: sequelize.QueryTypes.SELECT, replacements: { tz } },
+    );
+
+    const filas = await sequelize.query(
+        `WITH ${cteReferenciaTienda({ soloTiendas: true })}
+         SELECT ref.store_id,
+                ROUND(ref.promedio)::float8 AS promedio,
+                ref.ultima_compra
+           FROM referencia ref
+          WHERE ref.store_id IN (:ids)`,
+        {
+            type: sequelize.QueryTypes.SELECT,
+            replacements: { cid: companyId, tz, to: hoy, ids },
+        },
+    );
+
+    return new Map(filas.map((f) => [f.store_id, {
+        promedio: f.promedio,
+        ultima_compra: f.ultima_compra,
+    }]));
+}
+
+module.exports = { CTE_REFERENCIA_TIENDA, referenciaDeRuta, referenciaDeTiendas };

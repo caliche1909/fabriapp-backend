@@ -3,6 +3,7 @@ const { parseWindows, classify, formatMinutes, optimizeOpenStores } = require('.
 const { Op } = require('sequelize');
 const { construirParada, autorizarSobreLaRuta, SQL_TIENE_REPORTE_VIVO } = require('../utils/storeVisits');
 const { CODIGOS } = require('../utils/sincronizacion');
+const { referenciaDeTiendas } = require('../utils/referenciaCompra');
 
 /**
  * 📅 Horizonte máximo de planificación de rutas, en días.
@@ -71,15 +72,29 @@ const nombreDelResponsable = async (userId, transaction = null) => {
  * calcula aquí con la zona de la compañía —igual que en el listado— y no se deja al cliente,
  * que usaría la zona del dispositivo y podría discrepar.
  */
-const formatearParadaDelDia = async (visita, tz) => {
+const formatearParadaDelDia = async (visita, tz, companyId = null) => {
     const tienda = await stores.findByPk(visita.store_id, {
         attributes: [
-            'opening_time', 'closing_time',
+            'opening_time', 'closing_time', 'neighborhood',
             [routes.sequelize.fn('ST_Y', routes.sequelize.col('ubicacion')), 'latitude'],
             [routes.sequelize.fn('ST_X', routes.sequelize.col('ubicacion')), 'longitude'],
         ],
         raw: true,
     });
+
+    // 🛒 La misma referencia de compra que el listado, por la misma vía. Si no se pasa la
+    // compañía, o falla, la parada viaja sin el dato en vez de tumbar la respuesta.
+    let ref = null;
+    if (companyId) {
+        try {
+            const mapa = await referenciaDeTiendas(routes.sequelize, {
+                storeIds: [visita.store_id], companyId, tz,
+            });
+            ref = mapa.get(visita.store_id) || null;
+        } catch (e) {
+            console.error('⚠️ No se pudo calcular la referencia de compra de la parada:', e.message);
+        }
+    }
     const [{ nowmin }] = await routes.sequelize.query(
         `SELECT EXTRACT(HOUR FROM (now() AT TIME ZONE :tz)) * 60
               + EXTRACT(MINUTE FROM (now() AT TIME ZONE :tz)) AS nowmin`,
@@ -108,6 +123,10 @@ const formatearParadaDelDia = async (visita, tz) => {
         store_id: visita.store_id,
         store_name: visita.store_name,
         store_address: visita.store_address,
+        neighborhood: tienda?.neighborhood ?? null,
+        // `null` = nunca ha comprado, que NO es comprar cero. Ver `referenciaCompra.js`.
+        compra_promedio: ref ? ref.promedio : null,
+        ultima_compra: ref ? ref.ultima_compra : null,
         status: visita.status,
         arrived_at: visita.arrived_at,
         sale_amount: Number(visita.sale_amount) || 0,
@@ -1466,6 +1485,9 @@ module.exports = {
                     association: 'store',
                     attributes: [
                         'opening_time', 'closing_time',
+                        // 🏘️ El barrio, para que el vendedor sepa por dónde cae cada parada sin
+                        // leerse la dirección entera. Viaja con la visita y no se pide aparte.
+                        'neighborhood',
                         [routes.sequelize.fn('ST_Y', routes.sequelize.col('store.ubicacion')), 'latitude'],
                         [routes.sequelize.fn('ST_X', routes.sequelize.col('store.ubicacion')), 'longitude'],
                     ],
@@ -1484,6 +1506,32 @@ module.exports = {
             const resumen = { pending: 0, visited: 0, completed: 0, total: visitas.length };
             for (const v of visitas) { if (resumen[v.status] !== undefined) resumen[v.status] += 1; }
 
+            /**
+             * 🛒 Cuánto suele comprar cada tienda de la jornada.
+             *
+             * 🔴 SALE DE `utils/referenciaCompra.js`, QUE ES LA ÚNICA DEFINICIÓN. Es la misma que
+             * usan las tarjetas de la lista de tiendas y los informes de ventas. Si alguien copia
+             * aquí el CTE "para ajustarlo un poco", el vendedor verá un número en la tarjeta y
+             * otro en el cajón **con el mismo nombre**, y eso no se descubre revisando código: se
+             * sufre cuadrando caja.
+             *
+             * Se pide por las tiendas de LAS PARADAS —no por las de la ruta— para que una visita
+             * ocasional no quede fuera del mapa: "no está en el mapa" significa *nunca ha
+             * comprado*, y diría "Sin compras" de una tienda que sí compra.
+             *
+             * Si falla, se sigue: el cajón funciona sin este adorno y no vale la pena tumbar la
+             * jornada por él. Mismo criterio que en la lista de tiendas.
+             */
+            let referencia = new Map();
+            try {
+                referencia = await referenciaDeTiendas(routes.sequelize, {
+                    storeIds: visitas.map((v) => v.store_id),
+                    companyId, tz,
+                });
+            } catch (e) {
+                console.error('⚠️ No se pudo calcular la referencia de compra de la jornada:', e.message);
+            }
+
             const lista = visitas.map((v) => {
                 // Estado por horario solo para pendientes de HOY (es time-dependent).
                 let estado = null;
@@ -1493,11 +1541,18 @@ module.exports = {
                     estado = c.estado;
                     if (c.estado === 'abre_mas_tarde') abre_a = formatMinutes(c.abreA);
                 }
+                // 💰 `null` = NUNCA ha comprado, que NO es lo mismo que comprar cero. Quien lo
+                // pinte tiene que distinguirlo (la tarjeta dice "Sin compras", no "$0").
+                const ref = referencia.get(v.store_id);
+
                 return {
                     visit_id: v.id,
                     store_id: v.store_id,
                     store_name: v.store_name,
                     store_address: v.store_address,
+                    neighborhood: v['store.neighborhood'] ?? null,
+                    compra_promedio: ref ? ref.promedio : null,
+                    ultima_compra: ref ? ref.ultima_compra : null,
                     status: v.status,
                     arrived_at: v.arrived_at,
                     sale_amount: Number(v.sale_amount) || 0,
@@ -2064,7 +2119,7 @@ module.exports = {
                 return res.status(200).json({
                     success: true, status: 200, ya_existia: true,
                     message: 'Esta tienda ya está en la jornada de hoy.',
-                    visita: await formatearParadaDelDia(yaEsta, tz),
+                    visita: await formatearParadaDelDia(yaEsta, tz, companyId),
                 });
             }
 
@@ -2123,7 +2178,7 @@ module.exports = {
                 status: 201,
                 ya_existia: false,
                 message: `${store.name} se agregó como venta ocasional.`,
-                visita: await formatearParadaDelDia(creada, tz),
+                visita: await formatearParadaDelDia(creada, tz, companyId),
             });
         } catch (error) {
             if (transaction && !transaction.finished) await transaction.rollback();
