@@ -67,6 +67,8 @@ const formatTransferItem = (it) => ({
     product_id: it.product_id,
     quantity: num(it.quantity),
     received_quantity: it.received_quantity != null ? num(it.received_quantity) : null,
+    // Cuál de las dos cifras se dio por buena al cuadrar la novedad (null si el renglón cuadraba).
+    discrepancy_verdict: it.discrepancy_verdict || null,
     unit_cost: it.unit_cost != null ? num(it.unit_cost) : null,
     sale_price_snapshot: it.sale_price_snapshot != null ? num(it.sale_price_snapshot) : null,
     margin_snapshot: it.margin_snapshot != null ? num(it.margin_snapshot) : null,
@@ -678,14 +680,40 @@ module.exports = {
     },
 
     /**
-     * ✅ PATCH /api/stock_transfers/:id/resolve — Marca la NOVEDAD de un traspaso como CUADRADA.
-     * Body: { resolution_notes? }.
+     * ✅ PATCH /api/stock_transfers/:id/resolve — CUADRA la novedad de un traspaso MOVIENDO stock.
+     * Body: { verdicts: [{ item_id, verdict: 'ENVIADO'|'RECIBIDO' }], resolution_notes? }.
      *
-     * Es un acuse de auditoría: NO mueve stock (el cuadre real se hace con un AJUSTE en la bodega).
+     * 🔴 ANTES ESTO NO MOVÍA UN GRAMO. Era un acuse de auditoría: ponía la bandera y una nota en
+     * prosa, y el cuadre real quedaba a cargo de que un humano se acordara de hacer un AJUSTE a
+     * mano en la bodega correcta. El 2026-09-24 el traspaso #10 salió con 15 abuelas y se recibió
+     * con 16 —**una unidad nacida de la nada**—, se marcó como resuelta a las 08:03 con los libros
+     * todavía torcidos, y la compensación llegó a las 08:56 porque alguien se dio cuenta. Quedó
+     * suelta, con cara de error de conteo, sin nada que la enlazara al traspaso.
+     *
+     * AHORA RESOLVER OBLIGA A QUE UNA DE LAS DOS BODEGAS ASUMA LA DIFERENCIA. Por cada renglón
+     * descuadrado hay que decir cuál de las dos cifras vale:
+     *   - `ENVIADO`  → "vale lo enviado"  → el error está en el conteo del DESTINO → se ajusta el DESTINO.
+     *   - `RECIBIDO` → "vale lo recibido" → salió del origen más (o menos) de lo declarado → se ajusta el ORIGEN.
+     *
+     * 🔑 LA MISMA FÓRMULA EN LOS DOS CASOS: con E = enviado y R = recibido, el ajuste es **E − R**;
+     * lo único que cambia es a QUÉ bodega se aplica. Con E=15/R=16 da −1; con E=15/R=13 da +2. En
+     * ambos casos la suma total vuelve a cero: ya no se puede inventar ni evaporar mercancía.
+     *
+     * NO existe la salida "se perdió en tránsito". Decisión del usuario (2026-09-25): *"los productos
+     * no pueden quedar volando porque se convertirían en pérdidas, hay que darle la razón a
+     * alguien"*. La diferencia no desaparece — se muda a los libros de una bodega y reaparece en su
+     * siguiente conteo físico, donde alguien responde por ella.
+     *
+     * ⛔ Si la bodega que asume NO tiene existencias para absorberlo, **la novedad no se resuelve**
+     * y queda abierta hasta que haya stock. Una novedad visible es mejor que un hueco silencioso.
+     *
      * Solo aplica a traspasos `completado` CON `has_discrepancy = true` y que aún no estén resueltos.
      *
      * Autorización (3 niveles): owner · o con permiso `resolve_transfer_discrepancy` · o si es el
      * responsable de la bodega ORIGEN o DESTINO del traspaso.
+     * ⏸️ PENDIENTE (en pausa por decisión del usuario, 2026-09-25): hoy el encargado del DESTINO
+     * puede elegir `RECIBIDO` y con eso sacar mercancía de la bodega AJENA sin que nadie más lo vea.
+     * La propuesta sobre la mesa es que tocar la bodega ajena pida supervisor. Ver PENDING §0.6.
      */
     async resolveDiscrepancy(req, res) {
         const t = await sequelize.transaction();
@@ -717,16 +745,23 @@ module.exports = {
                 return res.status(409).json({ success: false, status: 409, message: 'Esta novedad ya fue resuelta' });
             }
 
-            // 🔐 Autorización (3 niveles). Cargar responsables de origen/destino para el fallback.
+            // Las bodegas se cargan SIEMPRE (no solo para la autorización): hacen falta para saber
+            // a CUÁL se le aplica el ajuste y para poder nombrarla en el libro y en los mensajes.
+            const [from, to] = await Promise.all([
+                inventory_locations.findOne({ where: { id: header.from_location_id, company_id }, transaction: t, paranoid: false }),
+                inventory_locations.findOne({ where: { id: header.to_location_id, company_id }, transaction: t, paranoid: false }),
+            ]);
+            if (!from || !to) {
+                await t.rollback();
+                return res.status(404).json({ success: false, status: 404, message: 'Alguna de las bodegas de este traspaso ya no existe' });
+            }
+
+            // 🔐 Autorización (3 niveles).
             const isOwner = req.user.userType === 'owner';
             const hasPerm = isOwner
                 || (Array.isArray(req.user.permissions) && req.user.permissions.includes('resolve_transfer_discrepancy'));
             if (!hasPerm) {
-                const [from, to] = await Promise.all([
-                    inventory_locations.findOne({ where: { id: header.from_location_id, company_id }, attributes: ['user_id'], transaction: t, paranoid: false }),
-                    inventory_locations.findOne({ where: { id: header.to_location_id, company_id }, attributes: ['user_id'], transaction: t, paranoid: false }),
-                ]);
-                const isResponsible = (from && from.user_id === userId) || (to && to.user_id === userId);
+                const isResponsible = from.user_id === userId || to.user_id === userId;
                 if (!isResponsible) {
                     await t.rollback();
                     return res.status(403).json({
@@ -736,14 +771,124 @@ module.exports = {
                 }
             }
 
-            // La nota es OBLIGATORIA: debe explicar cómo se cuadró (qué ajuste y en qué bodega).
+            // La nota ya NO es obligatoria: antes cargaba ella sola con explicar el cuadre, y ahora
+            // el veredicto de cada renglón dice el qué, el porqué y en qué bodega.
             const resolutionNotes = (req.body && req.body.resolution_notes && String(req.body.resolution_notes).trim()) || null;
-            if (!resolutionNotes) {
+
+            // 1) Los renglones QUE NO CUADRAN. Son los únicos que piden veredicto, y los únicos que
+            //    mueven stock: el resto del traspaso ya está bien y no se toca.
+            const items = await stock_transfer_items.findAll({
+                where: { transfer_id: header.id, company_id },
+                include: [{ model: products, as: 'product', attributes: ['id', 'name'], required: false }],
+                transaction: t,
+            });
+            const descuadrados = items.filter((it) => it.received_quantity != null
+                && num(it.received_quantity) !== num(it.quantity));
+
+            // 2) Veredictos del cuerpo, validados contra esos renglones: uno por cada descuadrado,
+            //    ninguno de un renglón que sí cuadraba, y sin repetidos.
+            const rawVerdicts = (req.body && req.body.verdicts) || [];
+            if (!Array.isArray(rawVerdicts)) {
                 await t.rollback();
-                return res.status(400).json({
-                    success: false, status: 400,
-                    message: 'Debes escribir una nota que explique cómo se resolvió la novedad (qué ajuste y en qué bodega)',
-                });
+                return res.status(400).json({ success: false, status: 400, message: 'Los veredictos no tienen el formato esperado' });
+            }
+            const verdictMap = new Map();
+            for (const v of rawVerdicts) {
+                const itemId = parseInt(v && v.item_id, 10);
+                const verdict = v && v.verdict;
+                if (!Number.isInteger(itemId) || itemId <= 0) {
+                    await t.rollback();
+                    return res.status(400).json({ success: false, status: 400, message: 'Uno de los renglones indicados no es válido' });
+                }
+                if (verdict !== 'ENVIADO' && verdict !== 'RECIBIDO') {
+                    await t.rollback();
+                    return res.status(400).json({ success: false, status: 400, message: 'Cada renglón descuadrado debe decir si vale lo enviado o lo recibido' });
+                }
+                if (verdictMap.has(itemId)) {
+                    await t.rollback();
+                    return res.status(400).json({ success: false, status: 400, message: 'Hay un renglón repetido entre los veredictos' });
+                }
+                verdictMap.set(itemId, verdict);
+            }
+
+            // 🔴 SIN VEREDICTO NO SE CUADRA. Es la regla entera: la diferencia no puede quedar
+            // volando, porque volando se convierte en una pérdida sin dueño. Una de las dos bodegas
+            // tiene que asumirla.
+            const idsDescuadrados = new Set(descuadrados.map((it) => it.id));
+            for (const it of descuadrados) {
+                if (!verdictMap.has(it.id)) {
+                    await t.rollback();
+                    return res.status(400).json({
+                        success: false, status: 400,
+                        message: `Falta decir qué cifra vale en "${it.product ? it.product.name : 'uno de los productos'}": una de las dos bodegas tiene que asumir la diferencia`,
+                    });
+                }
+            }
+            for (const itemId of verdictMap.keys()) {
+                if (!idsDescuadrados.has(itemId)) {
+                    await t.rollback();
+                    return res.status(400).json({ success: false, status: 400, message: 'Se indicó un veredicto para un renglón que sí cuadraba' });
+                }
+            }
+
+            // 3) Reusar el transfer_group_id de las dos patas del traspaso. 🔑 Esto es lo que amarra
+            //    el ajuste a su traspaso: sin ello queda suelto en el libro, indistinguible de un
+            //    error de conteo — que fue exactamente lo que pasó el 2026-09-24.
+            const salida = await product_stock_movements.findOne({
+                where: { company_id, reference_type: 'stock_transfer', reference_id: header.id, movement_type: 'TRASPASO_SALIDA' },
+                transaction: t,
+            });
+            const transferGroupId = (salida && salida.transfer_group_id) || null;
+            const etiqueta = `#${header.transfer_number}`;
+
+            // 4) Un AJUSTE por renglón descuadrado, en la bodega que ASUME.
+            for (const it of descuadrados) {
+                const veredicto = verdictMap.get(it.id);
+                const enviado = num(it.quantity);
+                const recibido = num(it.received_quantity);
+                // 🔑 La MISMA fórmula en los dos casos; lo único que cambia es la bodega.
+                //    ENVIADO  → el destino debería tener E y tiene R  → destino += (E − R)
+                //    RECIBIDO → el origen perdió E y debió perder R   → origen  += (E − R)
+                const delta = enviado - recibido;
+                const asume = veredicto === 'ENVIADO' ? to : from;
+                const nombreProducto = it.product ? it.product.name : `producto ${it.product_id}`;
+
+                // Pre-chequeo amigable. El guardián real es el CHECK (balance >= 0) del trigger,
+                // pero un 23514 seco no dice qué bodega ni qué producto, y aquí eso es el mensaje.
+                if (delta < 0) {
+                    const bal = await product_stock_balances.findOne({
+                        where: { product_id: it.product_id, location_id: asume.id },
+                        transaction: t,
+                    });
+                    const disponible = bal ? num(bal.balance) : 0;
+                    if (disponible + delta < 0) {
+                        await t.rollback();
+                        return res.status(409).json({
+                            success: false, status: 409,
+                            message: `${asume.name} no tiene con qué asumir la diferencia de ${nombreProducto}: hacen falta ${Math.abs(delta)} y solo hay ${disponible}. Haz primero la entrada y vuelve a cuadrar la novedad.`,
+                        });
+                    }
+                }
+
+                await product_stock_movements.create({
+                    company_id,
+                    product_id: it.product_id,
+                    location_id: asume.id,
+                    quantity_change: delta,
+                    movement_type: 'AJUSTE',
+                    transfer_group_id: transferGroupId,
+                    unit_cost: it.unit_cost,
+                    sale_price_snapshot: it.sale_price_snapshot,
+                    margin_snapshot: it.margin_snapshot,
+                    reference_type: 'stock_transfer',
+                    reference_id: header.id,
+                    description: veredicto === 'ENVIADO'
+                        ? `Cuadre novedad traspaso ${etiqueta}: vale lo enviado (${enviado}); ${asume.name} asume la diferencia`
+                        : `Cuadre novedad traspaso ${etiqueta}: vale lo recibido (${recibido}); ${asume.name} asume la diferencia`,
+                    user_id: userId,
+                }, { transaction: t });
+
+                await it.update({ discrepancy_verdict: veredicto }, { transaction: t });
             }
 
             await header.update({
@@ -769,11 +914,20 @@ module.exports = {
             return res.status(200).json({
                 success: true,
                 status: 200,
-                message: `Novedad del traspaso #${header.transfer_number} marcada como resuelta`,
+                message: `Novedad del traspaso #${header.transfer_number} cuadrada`,
                 transfer: formatTransfer(updated, { [header.id]: itemsCount }),
             });
         } catch (error) {
             await t.rollback();
+            // Red de seguridad del trigger: el pre-chequeo de arriba atrapa el caso normal con un
+            // mensaje que nombra bodega y producto, pero entre el chequeo y el INSERT puede colarse
+            // otro movimiento. Aquí ya no se sabe cuál fue, así que el mensaje es genérico.
+            if (error && error.original && error.original.code === '23514') {
+                return res.status(409).json({
+                    success: false, status: 409,
+                    message: 'La bodega que asume la diferencia se quedó sin existencias mientras cuadrabas. Vuelve a intentarlo.',
+                });
+            }
             console.error('❌ Error al cuadrar la novedad del traspaso:', error);
             return res.status(500).json({ success: false, status: 500, message: 'Error al cuadrar la novedad del traspaso' });
         }

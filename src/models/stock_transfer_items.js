@@ -60,6 +60,15 @@ module.exports = function (sequelize, DataTypes) {
       type: DataTypes.DECIMAL(6, 2),
       allowNull: true,
       comment: 'Snapshot del MARGEN (%) al emitir; NULL si no hay costo o venta'
+    },
+    // 🔴 Cuál de las dos cifras se dio por buena al CUADRAR la novedad de este renglón. Es el
+    // registro de QUIÉN ASUMIÓ la diferencia: sin él, el ajuste que genera la resolución queda
+    // suelto en el libro, indistinguible de un error de conteo (que es justo lo que pasó el
+    // 2026-09-24 con el traspaso #10). Ver `resolveDiscrepancy` en el controlador.
+    discrepancy_verdict: {
+      type: DataTypes.ENUM('ENVIADO', 'RECIBIDO'),
+      allowNull: true,
+      comment: 'ENVIADO = vale lo enviado (se ajusta el DESTINO) · RECIBIDO = vale lo recibido (se ajusta el ORIGEN). NULL = el renglón cuadraba'
     }
   }, {
     sequelize,
