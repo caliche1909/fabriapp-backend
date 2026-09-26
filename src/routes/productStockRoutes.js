@@ -37,10 +37,17 @@ router.get('/balances',
 );
 
 // 📍 Saldos de una bodega específica (?search=)
+//
+// 🔴 SIN `checkPermission` A PROPÓSITO. La autorización es de 3 niveles y vive en el controlador:
+// owner · con `view_products_stock` (cualquier bodega) · o el ENCARGADO de ESA bodega. Es el mismo
+// escalón que ya usan `adjustLocationStock`, `receiveTransfer` y `createTransfer`.
+//
+// Con el permiso en la ruta no se podía expresar: `view_products_stock` es "ver el stock de la
+// compañía", y dárselo a un vendedor para que viera su camión le abría también la central y los
+// camiones de sus compañeros — el controlador solo comprobaba la COMPAÑÍA, no la bodega.
 router.get('/balances/location/:locationId',
     verifyToken,
     listStockLimiter,
-    checkPermission('view_products_stock'),
     productStockController.getBalancesByLocation
 );
 

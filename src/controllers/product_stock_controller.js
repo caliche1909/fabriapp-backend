@@ -169,6 +169,21 @@ module.exports = {
                 return res.status(404).json({ success: false, status: 404, message: 'La bodega no existe o no pertenece a tu compañía', balances: [], location: null });
             }
 
+            // 🔐 Autorización (3 niveles). Antes esto lo hacía un `checkPermission` en la ruta, que
+            // solo sabía responder "sí a todas" o "no a ninguna": el controlador comprobaba la
+            // COMPAÑÍA pero no la BODEGA. Por eso un vendedor con `view_products_stock` habría
+            // podido leer la central y los camiones de sus compañeros.
+            const isOwner = req.user.userType === 'owner';
+            const canViewAll = isOwner
+                || (Array.isArray(req.user.permissions) && req.user.permissions.includes('view_products_stock'));
+            if (!canViewAll && location.user_id !== req.user.id) {
+                return res.status(403).json({
+                    success: false, status: 403,
+                    message: 'Solo puedes ver el stock de las bodegas de las que eres responsable',
+                    balances: [], location: null,
+                });
+            }
+
             const productWhere = { company_id };
             const search = (req.query.search || '').trim();
             if (search) {
@@ -378,13 +393,24 @@ module.exports = {
                 return res.status(400).json({ success: false, status: 400, message: 'La bodega no está operativa (debe estar activa y abierta)' });
             }
 
-            // 🔐 Autorización (3 niveles).
+            // 🔐 Autorización: owner o `create_products_stock`. **SOLO DOS NIVELES**, a diferencia
+            // del resto del módulo.
+            //
+            // 🔴 AQUÍ NO VALE SER EL ENCARGADO DE LA BODEGA, y es deliberado. Hasta el 2026-09-25 sí
+            // valía, y eso significaba que un vendedor podía bajarse unidades de su propio camión sin
+            // que nadie lo aprobara — justo por donde se le va un faltante. Decisión del usuario al
+            // abrir "Mi bodega" al rol SELLER: *"el vendedor no puede ajustar su bodega, solo
+            // recibe"*. Recibir traspasos y cuadrar novedades SÍ siguen siendo suyos, porque en
+            // los dos casos hay una contraparte que responde por el otro lado.
+            //
+            // No rompió ningún flujo en uso: de los 49 ajustes que había en producción ese día, 46
+            // los hizo un ADMIN y 4 el OWNER. Ningún vendedor había ajustado nunca.
             const isOwner = req.user.userType === 'owner';
             const hasPerm = isOwner
                 || (Array.isArray(req.user.permissions) && req.user.permissions.includes('create_products_stock'));
-            if (!hasPerm && location.user_id !== userId) {
+            if (!hasPerm) {
                 await t.rollback();
-                return res.status(403).json({ success: false, status: 403, message: 'No tienes permiso para ajustar el stock de esta bodega (solo su responsable puede)' });
+                return res.status(403).json({ success: false, status: 403, message: 'No tienes permiso para ajustar el stock de esta bodega' });
             }
 
             // Producto de la compañía.
